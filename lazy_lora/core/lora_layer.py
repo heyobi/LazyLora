@@ -202,3 +202,38 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
                 grad_input = (dx_base + dx_lora).reshape(input_activation.shape)
 
             return grad_A, grad_B, grad_input
+
+    def accumulate_grad(
+        self,
+        grad_A: Union["torch.Tensor", np.ndarray],
+        grad_B: Union["torch.Tensor", np.ndarray],
+    ) -> None:
+        """Accumulate analytical gradients into trainable LoRA parameters."""
+        if self.lora_A is None or self.lora_B is None:
+            return
+
+        if HAS_TORCH and isinstance(self.lora_A, torch.Tensor):
+            t_grad_A = grad_A if isinstance(grad_A, torch.Tensor) else torch.from_numpy(grad_A)
+            t_grad_B = grad_B if isinstance(grad_B, torch.Tensor) else torch.from_numpy(grad_B)
+
+            if self.lora_A.grad is None:
+                self.lora_A.grad = t_grad_A.clone().to(self.lora_A.device, dtype=self.lora_A.dtype)
+            else:
+                self.lora_A.grad.add_(t_grad_A.to(self.lora_A.device, dtype=self.lora_A.dtype))
+
+            if self.lora_B.grad is None:
+                self.lora_B.grad = t_grad_B.clone().to(self.lora_B.device, dtype=self.lora_B.dtype)
+            else:
+                self.lora_B.grad.add_(t_grad_B.to(self.lora_B.device, dtype=self.lora_B.dtype))
+        else:
+            gA = np.asarray(grad_A, dtype=np.float32)
+            gB = np.asarray(grad_B, dtype=np.float32)
+            if self.lora_A.grad is None:
+                self.lora_A.grad = gA.copy()
+            else:
+                self.lora_A.grad += gA
+
+            if self.lora_B.grad is None:
+                self.lora_B.grad = gB.copy()
+            else:
+                self.lora_B.grad += gB

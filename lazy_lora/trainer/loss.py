@@ -34,13 +34,23 @@ def compute_cross_entropy_loss(
     if HAS_TORCH and isinstance(logits, torch.Tensor):
         logits_flat = logits.view(-1, logits.size(-1))
         targets_flat = targets.view(-1)
+        valid_mask = targets_flat != ignore_index
         loss = F.cross_entropy(
             logits_flat,
             targets_flat,
             ignore_index=ignore_index,
             label_smoothing=label_smoothing,
         )
-        return loss, None
+        probs = F.softmax(logits_flat, dim=-1)
+        grad_logits = probs.clone()
+        if valid_mask.any():
+            num_valid = valid_mask.sum().item()
+            grad_logits[valid_mask, targets_flat[valid_mask]] -= 1.0
+            grad_logits[~valid_mask] = 0.0
+            grad_logits = grad_logits / max(1, num_valid)
+        else:
+            grad_logits.zero_()
+        return loss, grad_logits.view_as(logits)
     else:
         logits_flat = logits.reshape(-1, logits.shape[-1])
         targets_flat = targets.reshape(-1)
