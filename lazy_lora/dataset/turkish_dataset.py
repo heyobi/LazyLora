@@ -106,6 +106,10 @@ class TurkishDatasetManager:
 
         return self.train_file
 
+    def generate_curated_samples(self, target_samples: int = 100) -> str:
+        """Alias for generate_seed_dataset."""
+        return self.generate_seed_dataset(target_samples=target_samples)
+
 
 if __name__ == "__main__":
     mgr = TurkishDatasetManager()

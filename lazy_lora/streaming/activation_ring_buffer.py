@@ -34,6 +34,10 @@ class ActivationRingBuffer:
     def _get_path(self, layer_idx: int) -> str:
         return os.path.join(self.cache_dir, f"act_layer_{layer_idx:03d}.bin")
 
+    def get_activation_path(self, layer_idx: int) -> str:
+        """Public getter for layer activation binary file path."""
+        return self._get_path(layer_idx)
+
     def save_activation(
         self,
         layer_idx: int,
