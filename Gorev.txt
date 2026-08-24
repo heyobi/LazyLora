@@ -1,0 +1,1 @@
+Gorevimiz şuanda bu blgisayarın D diskinde bulunan kimi k3 adlı dil modelini Türkçeye çeviren lora modeli eğitmektir. C diskinin dolmamasına özen göster ve eğitimi hali hazırda bulunan wsl'imizi kullanarak yap.

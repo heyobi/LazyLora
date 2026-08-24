@@ -1,0 +1,11 @@
+Bu projede bir dil modelinin tamamını ram'e ya da GPU vram'ine almadan lora uygulanması hedeflenmektedir.
+Bu tekniğin uygulanabilmesi için öncelikle dil modelinin MoE desteğini sağlayabiliyor olması oldukça elzemdir.
+Bu işlemler için VRAM, RAM ve disk üzerindeki geçişler yazılacak motor tarafından verimli olarak yürütülmesi gerektiğinden Linux ya da wsl kullanımı önem arzetmektedir. Ram in ya da vram in taşmasından sa onu verimle yönetmek daha elzemdir.
+Projede cuda ya da zig düzeyinde de kodlara yer verilebilecektir. hatta gerekirse doğrudan bu kütüphaneler de eğitim için kullanılabilir.
+Lazy modunda yavaş yavaş parametreleri tarayarak lora uygun şekilde hedefe uygun şekilde eğitilmelidir.
+Bu işlemde eğitim öncesi testler oldukça kritiktir. Çünkü eğitime başlandığında kaybedilen şey zaman olduğundan çoğu durumda telafisi yoktur.
+MoE'nin avantajı ve lora tekniği sayesinde bu mümkün olabilecektir. Ama geliştirdiğimiz algoritma sayesinde bu hızla olacaktır. Bunun için üstün bir optimizasyon matematiği hilesine ihtiyacın olacak. Hesap hızının önemi açısından bu kritik.
+Eğitim esansında metrikler oldukça kritik. Ne kadar kaldığı verinin anlık ne kadarının ram'de ne kadarının vram de durduğu gibi metriklerin tutulması hayati öneme sahiptir. Eğitimin sağlığı ve ilerlemesiyle ilgili metrikleri açık ve düzgün bir şekilde görüntüleyebilmeliyiz.
+Donanım limitlerini eğitim öncesi analiz etmelisin ve bilgisayarda ne kadar ram ne kadar vram kaç işlemci çekirdeği kaç gpu çekirdeği ne kadar her disk için ne kadar disk alanı olduğunu yazdırmalısın. Bu tip metrikler mimari kuğuda da dikkat edeceğimiz şeyler olacak. Amacımız çılgın bu projede minimum kaynaklarla bu işi yapmaktır. 
+ES-MoE: Scaling Beyond the GPU Memory Limit for Large Mixture-of-Experts Model Training, adlı makalede Uzman Bazlı Dinamik Yükleme (Layer-wise değil, Expert-wise), Expert-wise), PCIe Darboğazını Çözmek: Pipelined Expert Processing, Optimizer Yükünü CPU'ya Yıkmak gibi bir makale gördüm. Bu makale bize ışık tutabilecek olsa da sen öncelikle sistem kaynaklarımıza göre kendi tekniğini de geliştirebilmen proje için hayati öneme sahiptir.
+
