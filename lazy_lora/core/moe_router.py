@@ -64,9 +64,10 @@ class KimiK3MoERouter(nn.Module if HAS_TORCH else object):
             topk_weights: [N, top_k] float32 normalized combining weights
         """
         if HAS_TORCH and isinstance(x, torch.Tensor):
-            orig_shape = x.shape
-            x_flat = x.view(-1, self.hidden_size)  # [N, d]
-            
+            x_flat = x.view(-1, self.hidden_size)
+            if self.weight.dtype != x_flat.dtype:
+                x_flat = x_flat.to(self.weight.dtype)
+
             # Linear projection: logits = x @ W.T
             logits = F.linear(x_flat, self.weight)  # [N, num_experts]
             
@@ -75,7 +76,8 @@ class KimiK3MoERouter(nn.Module if HAS_TORCH else object):
             
             # Selection logits (steered by bias if present)
             if self.bias is not None:
-                selection_logits = logits + self.bias
+                bias_val = self.bias.to(logits.dtype) if isinstance(self.bias, torch.Tensor) else self.bias
+                selection_logits = logits + bias_val
             else:
                 selection_logits = logits
                 
@@ -94,13 +96,15 @@ class KimiK3MoERouter(nn.Module if HAS_TORCH else object):
             return topk_indices, topk_weights
         else:
             # NumPy / Reference CPU implementation
-            x_flat = x.reshape(-1, self.hidden_size)
-            logits = np.matmul(x_flat, self.weight.T)
-            
+            x_flat = np.asarray(x, dtype=np.float32).reshape(-1, self.hidden_size)
+            weight_np = self.weight.detach().to(torch.float32).cpu().numpy() if (HAS_TORCH and isinstance(self.weight, torch.Tensor)) else np.asarray(self.weight, dtype=np.float32)
+            bias_np = self.bias.detach().to(torch.float32).cpu().numpy() if (HAS_TORCH and isinstance(self.bias, torch.Tensor)) else (np.asarray(self.bias, dtype=np.float32) if self.bias is not None else None)
+
+            logits = np.matmul(x_flat, weight_np.T)
             raw_scores = 1.0 / (1.0 + np.exp(-logits))
             
-            if self.bias is not None:
-                selection_logits = logits + self.bias
+            if bias_np is not None:
+                selection_logits = logits + bias_np
             else:
                 selection_logits = logits
                 

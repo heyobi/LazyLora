@@ -103,19 +103,34 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
             if HAS_TORCH and isinstance(x, torch.Tensor):
                 return torch.zeros((*x.shape[:-1], self.out_features), dtype=x.dtype, device=x.device)
             else:
-                return np.zeros((*x.shape[:-1], self.out_features), dtype=x.dtype)
+                return np.zeros((*x.shape[:-1], self.out_features), dtype=getattr(x, "dtype", np.float32))
 
         if HAS_TORCH and isinstance(x, torch.Tensor):
             x_dropped = self.dropout(x)
+            orig_dtype = x.dtype
+            if self.lora_A is not None and x_dropped.dtype != self.lora_A.dtype:
+                x_dropped = x_dropped.to(self.lora_A.dtype)
             # x @ A.T -> [..., r]
             intermediate = F.linear(x_dropped, self.lora_A)
             # intermediate @ B.T -> [..., out_features]
             delta = F.linear(intermediate, self.lora_B) * self.scaling
+            if delta.dtype != orig_dtype:
+                delta = delta.to(orig_dtype)
             return delta
         else:
-            A_data = self.lora_A.data if hasattr(self.lora_A, "data") else self.lora_A
-            B_data = self.lora_B.data if hasattr(self.lora_B, "data") else self.lora_B
-            intermediate = np.matmul(x, A_data.T)
+            def _to_np(p):
+                if p is None:
+                    return None
+                if HAS_TORCH and isinstance(p, torch.Tensor):
+                    return p.detach().to(torch.float32).cpu().numpy()
+                if hasattr(p, "data"):
+                    return _to_np(p.data)
+                return np.asarray(p, dtype=np.float32)
+
+            A_data = _to_np(self.lora_A)
+            B_data = _to_np(self.lora_B)
+            x_np = np.asarray(x, dtype=np.float32)
+            intermediate = np.matmul(x_np, A_data.T)
             delta = np.matmul(intermediate, B_data.T) * self.scaling
             return delta
 
@@ -130,15 +145,30 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
         y = x @ base_weight.T + (base_bias) + forward_lora_only(x)
         """
         if HAS_TORCH and isinstance(x, torch.Tensor):
-            # Base linear projection
+            if base_weight is not None and base_weight.dtype != x.dtype:
+                base_weight = base_weight.to(x.dtype)
+            if base_bias is not None and base_bias.dtype != x.dtype:
+                base_bias = base_bias.to(x.dtype)
             y_base = F.linear(x, base_weight, base_bias)
             y_lora = self.forward_lora_only(x)
             return y_base + y_lora
         else:
-            y_base = np.matmul(x, base_weight.T)
-            if base_bias is not None:
-                y_base = y_base + base_bias
-            y_lora = self.forward_lora_only(x)
+            def _to_np(p):
+                if p is None:
+                    return None
+                if HAS_TORCH and isinstance(p, torch.Tensor):
+                    return p.detach().to(torch.float32).cpu().numpy()
+                if hasattr(p, "data"):
+                    return _to_np(p.data)
+                return np.asarray(p, dtype=np.float32)
+
+            x_np = np.asarray(x, dtype=np.float32)
+            bw_np = _to_np(base_weight)
+            bb_np = _to_np(base_bias)
+            y_base = np.matmul(x_np, bw_np.T)
+            if bb_np is not None:
+                y_base = y_base + bb_np
+            y_lora = self.forward_lora_only(x_np)
             return y_base + y_lora
 
     def compute_lora_gradients(
@@ -159,8 +189,9 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
             grad_input: Gradient w.r.t input_activation [..., in_features]
         """
         if HAS_TORCH and isinstance(grad_output, torch.Tensor):
-            x_flat = input_activation.view(-1, self.in_features)  # [N, d_in]
-            dy_flat = grad_output.view(-1, self.out_features)     # [N, d_out]
+            target_dtype = self.lora_A.dtype if self.lora_A is not None else grad_output.dtype
+            x_flat = input_activation.view(-1, self.in_features).to(target_dtype)
+            dy_flat = grad_output.view(-1, self.out_features).to(target_dtype)
 
             # Intermediate h = x @ A.T  [N, r]
             h = F.linear(x_flat, self.lora_A)
@@ -177,17 +208,29 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
             # Downstream grad to input: dx = dy @ W_0 + dh @ A
             grad_input = None
             if base_weight is not None:
-                dx_base = F.linear(dy_flat, base_weight.t())
+                bw = base_weight.to(target_dtype) if base_weight.dtype != target_dtype else base_weight
+                dx_base = F.linear(dy_flat, bw.t())
                 dx_lora = F.linear(dh, self.lora_A.t())
                 grad_input = (dx_base + dx_lora).view_as(input_activation)
+                if grad_input.dtype != input_activation.dtype:
+                    grad_input = grad_input.to(input_activation.dtype)
 
             return grad_A, grad_B, grad_input
         else:
-            x_flat = input_activation.reshape(-1, self.in_features)
-            dy_flat = grad_output.reshape(-1, self.out_features)
+            def _to_np(p):
+                if p is None:
+                    return None
+                if HAS_TORCH and isinstance(p, torch.Tensor):
+                    return p.detach().to(torch.float32).cpu().numpy()
+                if hasattr(p, "data"):
+                    return _to_np(p.data)
+                return np.asarray(p, dtype=np.float32)
 
-            A_data = self.lora_A.data if hasattr(self.lora_A, "data") else self.lora_A
-            B_data = self.lora_B.data if hasattr(self.lora_B, "data") else self.lora_B
+            x_flat = np.asarray(input_activation, dtype=np.float32).reshape(-1, self.in_features)
+            dy_flat = np.asarray(grad_output, dtype=np.float32).reshape(-1, self.out_features)
+
+            A_data = _to_np(self.lora_A)
+            B_data = _to_np(self.lora_B)
 
             h = np.matmul(x_flat, A_data.T)
             grad_B = self.scaling * np.matmul(dy_flat.T, h)
@@ -197,7 +240,8 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
 
             grad_input = None
             if base_weight is not None:
-                dx_base = np.matmul(dy_flat, base_weight)
+                bw_np = _to_np(base_weight)
+                dx_base = np.matmul(dy_flat, bw_np)
                 dx_lora = np.matmul(dh, A_data)
                 grad_input = (dx_base + dx_lora).reshape(input_activation.shape)
 
@@ -213,21 +257,38 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
             return
 
         if HAS_TORCH and isinstance(self.lora_A, torch.Tensor):
-            t_grad_A = grad_A if isinstance(grad_A, torch.Tensor) else torch.from_numpy(grad_A)
-            t_grad_B = grad_B if isinstance(grad_B, torch.Tensor) else torch.from_numpy(grad_B)
+            if isinstance(grad_A, torch.Tensor):
+                t_grad_A = grad_A.to(self.lora_A.device, dtype=self.lora_A.dtype)
+            else:
+                t_grad_A = torch.from_numpy(np.asarray(grad_A, dtype=np.float32)).to(self.lora_A.device, dtype=self.lora_A.dtype)
+
+            if isinstance(grad_B, torch.Tensor):
+                t_grad_B = grad_B.to(self.lora_B.device, dtype=self.lora_B.dtype)
+            else:
+                t_grad_B = torch.from_numpy(np.asarray(grad_B, dtype=np.float32)).to(self.lora_B.device, dtype=self.lora_B.dtype)
 
             if self.lora_A.grad is None:
-                self.lora_A.grad = t_grad_A.clone().to(self.lora_A.device, dtype=self.lora_A.dtype)
+                self.lora_A.grad = t_grad_A.clone()
             else:
-                self.lora_A.grad.add_(t_grad_A.to(self.lora_A.device, dtype=self.lora_A.dtype))
+                self.lora_A.grad.add_(t_grad_A)
 
             if self.lora_B.grad is None:
-                self.lora_B.grad = t_grad_B.clone().to(self.lora_B.device, dtype=self.lora_B.dtype)
+                self.lora_B.grad = t_grad_B.clone()
             else:
-                self.lora_B.grad.add_(t_grad_B.to(self.lora_B.device, dtype=self.lora_B.dtype))
+                self.lora_B.grad.add_(t_grad_B)
         else:
-            gA = np.asarray(grad_A, dtype=np.float32)
-            gB = np.asarray(grad_B, dtype=np.float32)
+            def _to_np(p):
+                if p is None:
+                    return None
+                if HAS_TORCH and isinstance(p, torch.Tensor):
+                    return p.detach().to(torch.float32).cpu().numpy()
+                if hasattr(p, "data"):
+                    return _to_np(p.data)
+                return np.asarray(p, dtype=np.float32)
+
+            gA = _to_np(grad_A)
+            gB = _to_np(grad_B)
+
             if self.lora_A.grad is None:
                 self.lora_A.grad = gA.copy()
             else:
