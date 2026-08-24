@@ -33,7 +33,8 @@ def compute_cross_entropy_loss(
     """
     if HAS_TORCH and isinstance(logits, torch.Tensor):
         logits_flat = logits.view(-1, logits.size(-1))
-        targets_flat = targets.view(-1)
+        targets_t = targets if isinstance(targets, torch.Tensor) else torch.as_tensor(targets, dtype=torch.long, device=logits.device)
+        targets_flat = targets_t.view(-1)
         valid_mask = targets_flat != ignore_index
         loss = F.cross_entropy(
             logits_flat,

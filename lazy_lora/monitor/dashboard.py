@@ -79,7 +79,13 @@ class TerminalDashboard:
         )
         lines.append("=" * w)
 
-        print("\n".join(lines), flush=True)
+        output_text = "\n".join(lines)
+        try:
+            print(output_text, flush=True)
+        except UnicodeEncodeError:
+            encoding = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
+            safe_text = output_text.encode(encoding, errors="replace").decode(encoding)
+            print(safe_text, flush=True)
 
 
 if __name__ == "__main__":
