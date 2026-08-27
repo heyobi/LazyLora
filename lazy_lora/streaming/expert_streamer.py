@@ -100,6 +100,7 @@ class DynamicExpertStreamer:
         hidden_size: int = 7168,
         latent_size: int = 3584,
         moe_intermediate_size: int = 3072,
+        shared_intermediate_size: Optional[int] = None,
     ):
         self.mmap_streamer = mmap_streamer
         self.device = device
@@ -108,6 +109,8 @@ class DynamicExpertStreamer:
         self.hidden_size = hidden_size
         self.latent_size = latent_size
         self.moe_intermediate_size = moe_intermediate_size
+        # Kimi K3 fuses its 2 shared experts into one module of width 2 * moe_intermediate_size
+        self.shared_intermediate_size = shared_intermediate_size or (moe_intermediate_size * 2)
 
     def _load_single_expert(self, layer_idx: int, expert_idx: int, is_shared: bool = False) -> ExpertWeightBundle:
         """
@@ -148,8 +151,8 @@ class DynamicExpertStreamer:
         if gate is None or up is None or down is None:
             if is_shared:
                 # Shared expert: intermediate_size = moe_intermediate_size * num_shared_experts
-                d_in = self.hidden_size           # 7168
-                d_mid = self.moe_intermediate_size * 2  # 3072*2 = 6144
+                d_in = self.hidden_size                 # 7168
+                d_mid = self.shared_intermediate_size   # 3072*2 = 6144
             else:
                 # Routed expert: operates in latent space
                 d_in = self.latent_size            # 3584

@@ -42,25 +42,46 @@ class LoRALayerBundle:
         hidden_size: int = 7168,
         attn_out_size: int = 12288,
         moe_latent_size: int = 3584,
+        moe_intermediate_size: int = 3072,
+        shared_intermediate_size: int = 6144,
         r: int = 16,
         alpha: int = 32,
         dropout: float = 0.0,
         device: str = "cpu",
     ):
         self.layer_idx = layer_idx
-        # Attention LoRA adapters
+        # Attention LoRA adapters (hidden 7168 -> num_heads * head_dim)
         self.q_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
         self.v_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
-        
-        # MoE Expert LoRA adapters (shared adapter pool or per-expert low rank)
-        self.gate_lora = LazyLoRALinear(hidden_size, moe_latent_size, r, alpha, dropout, device)
-        self.up_lora = LazyLoRALinear(hidden_size, moe_latent_size, r, alpha, dropout, device)
-        self.down_lora = LazyLoRALinear(moe_latent_size, hidden_size, r, alpha, dropout, device)
+
+        # Shared-expert LoRA adapters (dense path: 7168 -> 6144 -> 7168)
+        self.shared_gate_lora = LazyLoRALinear(hidden_size, shared_intermediate_size, r, alpha, dropout, device)
+        self.shared_up_lora = LazyLoRALinear(hidden_size, shared_intermediate_size, r, alpha, dropout, device)
+        self.shared_down_lora = LazyLoRALinear(shared_intermediate_size, hidden_size, r, alpha, dropout, device)
+
+        # Routed-expert LoRA adapters, shared across the 896 experts of this layer.
+        # They live in the Kimi K3 latent MoE space: 3584 -> 3072 -> 3584.
+        self.gate_lora = LazyLoRALinear(moe_latent_size, moe_intermediate_size, r, alpha, dropout, device)
+        self.up_lora = LazyLoRALinear(moe_latent_size, moe_intermediate_size, r, alpha, dropout, device)
+        self.down_lora = LazyLoRALinear(moe_intermediate_size, moe_latent_size, r, alpha, dropout, device)
+
+    def all_modules(self) -> List[Tuple[str, Any]]:
+        """(name, module) pairs for every LoRA adapter in this layer."""
+        return [
+            ("q_lora", self.q_lora),
+            ("v_lora", self.v_lora),
+            ("shared_gate_lora", self.shared_gate_lora),
+            ("shared_up_lora", self.shared_up_lora),
+            ("shared_down_lora", self.shared_down_lora),
+            ("gate_lora", self.gate_lora),
+            ("up_lora", self.up_lora),
+            ("down_lora", self.down_lora),
+        ]
 
     def get_parameters(self) -> List[Any]:
         """Returns all trainable LoRA tensors in this layer."""
         params = []
-        for mod in [self.q_lora, self.v_lora, self.gate_lora, self.up_lora, self.down_lora]:
+        for _, mod in self.all_modules():
             if mod.lora_A is not None:
                 params.append(mod.lora_A)
             if mod.lora_B is not None:
@@ -94,6 +115,7 @@ class LazyLoRATrainer:
             hidden_size=self.config.model.hidden_size,
             latent_size=self.config.model.routed_expert_hidden_size,
             moe_intermediate_size=self.config.model.moe_intermediate_size,
+            shared_intermediate_size=self.config.model.moe_intermediate_size * self.config.model.num_shared_experts,
         )
         self.act_buffer = ActivationRingBuffer(
             cache_dir=self.config.paths.activation_cache_dir,
@@ -115,6 +137,8 @@ class LazyLoRATrainer:
                 hidden_size=self.config.model.hidden_size,
                 attn_out_size=self.config.model.num_attention_heads * self.config.model.head_dim,
                 moe_latent_size=self.config.model.routed_expert_hidden_size,
+                moe_intermediate_size=self.config.model.moe_intermediate_size,
+                shared_intermediate_size=self.config.model.moe_intermediate_size * self.config.model.num_shared_experts,
                 r=self.config.lora.r,
                 alpha=self.config.lora.lora_alpha,
                 dropout=self.config.lora.lora_dropout,
@@ -231,14 +255,17 @@ class LazyLoRATrainer:
 
         # 4. MoE Expert Execution (1 Shared Module + Active Top-16 Routed Experts)
         # Kimi K3 Latent MoE: h(7168) → down_proj → h_latent(3584) → expert(3584→3072→3584) → up_proj → (7168)
-        # LoRA is NOT applied to MoE experts due to dimension mismatch; applied to attention q/v only.
+        # LoRA is applied on the full target_modules set: attention q/v, the shared expert
+        # (7168→6144→7168) and the routed experts in latent space (3584→3072→3584).
         if HAS_TORCH and isinstance(h_in, torch.Tensor):
             # Shared expert (single module, input=h_moe_norm [7168], output=7168)
             s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
-            s_gate = F.linear(h_moe_norm, s_bundle.gate_proj)
-            s_up = F.linear(h_moe_norm, s_bundle.up_proj)
+            if h_moe_norm.dtype != s_bundle.gate_proj.dtype:
+                h_moe_norm = h_moe_norm.to(s_bundle.gate_proj.dtype)
+            s_gate = F.linear(h_moe_norm, s_bundle.gate_proj) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
+            s_up = F.linear(h_moe_norm, s_bundle.up_proj) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
             s_situ = situ_glu_forward(s_gate, s_up)
-            shared_out = F.linear(s_situ, s_bundle.down_proj)
+            shared_out = F.linear(s_situ, s_bundle.down_proj) + bundle.shared_down_lora.forward_lora_only(s_situ)
             del s_bundle, s_gate, s_up, s_situ
 
             # Latent MoE projections: load routed_expert_down_proj and routed_expert_up_proj
@@ -261,7 +288,7 @@ class LazyLoRATrainer:
 
             # Project h_moe_norm (7168) → h_latent (3584) for routed experts
             N, top_k = topk_indices.shape
-            h_flat = h_moe_norm.view(-1, d_h)
+            h_flat = h_moe_norm.view(-1, d_h).to(latent_down_w.dtype)
             h_latent = F.linear(h_flat, latent_down_w)  # [N, 3584]
             del latent_down_w
 
@@ -274,10 +301,10 @@ class LazyLoRATrainer:
                     continue
 
                 e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
-                e_gate = F.linear(h_latent, e_bundle.gate_proj)   # [N, 3072]
-                e_up = F.linear(h_latent, e_bundle.up_proj)       # [N, 3072]
+                e_gate = F.linear(h_latent, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)   # [N, 3072]
+                e_up = F.linear(h_latent, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_latent)        # [N, 3072]
                 e_situ = situ_glu_forward(e_gate, e_up)
-                e_down = F.linear(e_situ, e_bundle.down_proj)     # [N, 3584]
+                e_down = F.linear(e_situ, e_bundle.down_proj) + bundle.down_lora.forward_lora_only(e_situ)      # [N, 3584]
                 del e_bundle, e_gate, e_up, e_situ
 
                 token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
@@ -285,8 +312,9 @@ class LazyLoRATrainer:
                 del e_down
 
             # Apply latent norm then project back: (3584) → (7168)
-            routed_latent_out = RMSNormFunction.forward(routed_latent_out, latent_norm_w)
-            routed_out = F.linear(routed_latent_out, latent_up_w)  # [N, 7168]
+            # Norm weights ship as float32 in some shards; keep the whole path in bfloat16.
+            routed_latent_out = RMSNormFunction.forward(routed_latent_out, latent_norm_w.to(routed_latent_out.dtype))
+            routed_out = F.linear(routed_latent_out.to(latent_up_w.dtype), latent_up_w)  # [N, 7168]
             del latent_up_w, latent_norm_w, routed_latent_out, h_latent
 
             moe_out = shared_out + routed_out.view_as(h_mid)
@@ -295,10 +323,10 @@ class LazyLoRATrainer:
             # NumPy path
             # Shared expert
             s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
-            s_gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T)
-            s_up = np.matmul(h_moe_norm, s_bundle.up_proj.T)
+            s_gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
+            s_up = np.matmul(h_moe_norm, s_bundle.up_proj.T) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
             s_situ = situ_glu_forward(s_gate, s_up)
-            shared_out = np.matmul(s_situ, s_bundle.down_proj.T)
+            shared_out = np.matmul(s_situ, s_bundle.down_proj.T) + bundle.shared_down_lora.forward_lora_only(s_situ)
 
             # Latent MoE projections
             d_h = self.config.model.hidden_size
@@ -314,10 +342,10 @@ class LazyLoRATrainer:
                 if not np.any(mask):
                     continue
                 e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
-                e_gate = np.matmul(h_latent, e_bundle.gate_proj.T)
-                e_up = np.matmul(h_latent, e_bundle.up_proj.T)
+                e_gate = np.matmul(h_latent, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_latent)
+                e_up = np.matmul(h_latent, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_latent)
                 e_situ = situ_glu_forward(e_gate, e_up)
-                e_down = np.matmul(e_situ, e_bundle.down_proj.T)
+                e_down = np.matmul(e_situ, e_bundle.down_proj.T) + bundle.down_lora.forward_lora_only(e_situ)
 
                 token_weights = np.sum(topk_weights * mask.astype(np.float32), axis=-1, keepdims=True)
                 routed_latent_out = routed_latent_out + e_down * token_weights
@@ -366,64 +394,90 @@ class LazyLoRATrainer:
             topk_indices, topk_weights = self.router.forward(h_moe_norm)
             active_experts = self.router.get_active_expert_set(topk_indices)
 
-            # MoE Backward: grad_h_out flows into residual h_mid and into MoE experts
+            # MoE Backward (Kimi K3 Latent MoE), mirroring the forward pass exactly:
+            #   shared expert : 7168 -> 6144 -> 7168   (LoRA on gate/up/down)
+            #   routed experts: 3584 -> 3072 -> 3584   (LoRA on gate/up/down, latent space)
             grad_h_mid = grad_h_out.clone()
             grad_moe_norm = torch.zeros_like(h_moe_norm)
 
-            # 1. Shared experts backward
-            for s_idx in range(self.config.model.num_shared_experts):
-                s_bundle = self.expert_streamer.get_expert(layer_idx, s_idx, is_shared=True)
-                gate = F.linear(h_moe_norm, s_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_moe_norm)
-                up = F.linear(h_moe_norm, s_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_moe_norm)
-                situ = situ_glu_forward(gate, up)
+            # 1. Shared expert backward (single module, dense path)
+            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
+            if h_moe_norm.dtype != s_bundle.gate_proj.dtype:
+                h_moe_norm = h_moe_norm.to(s_bundle.gate_proj.dtype)
+            gate = F.linear(h_moe_norm, s_bundle.gate_proj) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
+            up = F.linear(h_moe_norm, s_bundle.up_proj) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
+            situ = situ_glu_forward(gate, up)
 
-                # Down LoRA backward
-                gA_d, gB_d, d_situ = bundle.down_lora.compute_lora_gradients(grad_h_out, situ, s_bundle.down_proj)
-                bundle.down_lora.accumulate_grad(gA_d, gB_d)
+            gA_d, gB_d, d_situ = bundle.shared_down_lora.compute_lora_gradients(grad_h_out, situ, s_bundle.down_proj)
+            bundle.shared_down_lora.accumulate_grad(gA_d, gB_d)
 
-                if d_situ is not None:
-                    d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_moe_norm, s_bundle.gate_proj)
-                    bundle.gate_lora.accumulate_grad(gA_g, gB_g)
+            if d_situ is not None:
+                d_gate, d_up = situ_glu_backward(d_situ, gate, up)
+                gA_g, gB_g, d_in_g = bundle.shared_gate_lora.compute_lora_gradients(d_gate, h_moe_norm, s_bundle.gate_proj)
+                bundle.shared_gate_lora.accumulate_grad(gA_g, gB_g)
 
-                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_moe_norm, s_bundle.up_proj)
-                    bundle.up_lora.accumulate_grad(gA_u, gB_u)
+                gA_u, gB_u, d_in_u = bundle.shared_up_lora.compute_lora_gradients(d_up, h_moe_norm, s_bundle.up_proj)
+                bundle.shared_up_lora.accumulate_grad(gA_u, gB_u)
 
-                    if d_in_g is not None and d_in_u is not None:
-                        grad_moe_norm.add_(d_in_g + d_in_u)
+                if d_in_g is not None and d_in_u is not None:
+                    grad_moe_norm.add_(d_in_g + d_in_u)
+            del s_bundle, gate, up, situ
 
-            # 2. Routed active experts backward
-            h_flat = h_moe_norm.view(-1, self.config.model.hidden_size)
-            grad_h_flat = grad_h_out.view(-1, self.config.model.hidden_size)
+            # 2. Routed experts backward, in the 3584-dim latent space
+            d_h = self.config.model.hidden_size
+            d_l = self.config.model.routed_expert_hidden_size
+            prefix = f"model.layers.{layer_idx}.block_sparse_moe."
+            latent_down_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_down_proj.weight", target_device=self.device)
+            latent_up_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_up_proj.weight", target_device=self.device)
+            if latent_down_w is None:
+                latent_down_w = torch.randn(d_l, d_h, dtype=torch.bfloat16, device=self.device) * 0.01
+            if latent_up_w is None:
+                latent_up_w = torch.randn(d_h, d_l, dtype=torch.bfloat16, device=self.device) * 0.01
+            latent_down_w = latent_down_w.to(torch.bfloat16)
+            latent_up_w = latent_up_w.to(torch.bfloat16)
+
+            h_flat = h_moe_norm.view(-1, d_h).to(latent_down_w.dtype)
+            h_latent = F.linear(h_flat, latent_down_w)                       # [N, 3584]
+            grad_flat = grad_h_out.view(-1, d_h).to(latent_up_w.dtype)
+            # Back through routed_expert_up_proj (latent RMSNorm jacobian approximated as identity)
+            grad_latent_out = F.linear(grad_flat, latent_up_w.t())           # [N, 3584]
+            grad_latent_in = torch.zeros_like(h_latent)
+
             for exp_id in active_experts:
                 mask = (topk_indices == exp_id)
                 if not mask.any():
                     continue
                 e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
-                gate = F.linear(h_flat, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_flat)
-                up = F.linear(h_flat, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_flat)
+                gate = F.linear(h_latent, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)
+                up = F.linear(h_latent, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_latent)
                 situ = situ_glu_forward(gate, up)
 
-                token_weights = (topk_weights * mask.float()).sum(dim=-1, keepdim=True)
-                d_down_weighted = grad_h_flat * token_weights
+                token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
+                token_weights = token_weights.view(-1, 1).to(grad_latent_out.dtype)
+                d_down_weighted = grad_latent_out * token_weights            # [N, 3584]
 
                 gA_d, gB_d, d_situ = bundle.down_lora.compute_lora_gradients(d_down_weighted, situ, e_bundle.down_proj)
                 bundle.down_lora.accumulate_grad(gA_d, gB_d)
 
                 if d_situ is not None:
                     d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_flat, e_bundle.gate_proj)
+                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_latent, e_bundle.gate_proj)
                     bundle.gate_lora.accumulate_grad(gA_g, gB_g)
 
-                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_flat, e_bundle.up_proj)
+                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_latent, e_bundle.up_proj)
                     bundle.up_lora.accumulate_grad(gA_u, gB_u)
 
                     if d_in_g is not None and d_in_u is not None:
-                        grad_moe_norm.add_((d_in_g + d_in_u).view_as(h_moe_norm))
+                        grad_latent_in.add_(d_in_g + d_in_u)
+                del e_bundle, gate, up, situ
+
+            # Back through routed_expert_down_proj: latent (3584) -> hidden (7168)
+            grad_moe_norm.add_(F.linear(grad_latent_in, latent_down_w.t()).view_as(h_moe_norm))
+            del latent_down_w, latent_up_w, h_latent, grad_latent_in, grad_latent_out
 
             grad_h_mid.add_(grad_moe_norm)
 
-            # 3. Attention Sublayer Backward
+            # Attention Sublayer Backward
             d_v = F.linear(grad_h_mid, trunk.o_proj.t())
             gA_v, gB_v, d_in_v = bundle.v_lora.compute_lora_gradients(d_v, h_norm1, trunk.v_proj)
             bundle.v_lora.accumulate_grad(gA_v, gB_v)
@@ -448,57 +502,68 @@ class LazyLoRATrainer:
             topk_indices, topk_weights = self.router.forward(h_moe_norm)
             active_experts = self.router.get_active_expert_set(topk_indices)
 
+            # MoE Backward: same structure as the torch path (shared dense expert +
+            # routed experts in the 3584-dim latent space), full LoRA coverage.
             grad_h_mid = grad_h_out.copy().reshape(orig_shape)
             grad_moe_norm = np.zeros(orig_shape, dtype=np.float32)
 
-            for s_idx in range(self.config.model.num_shared_experts):
-                s_bundle = self.expert_streamer.get_expert(layer_idx, s_idx, is_shared=True)
-                gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_moe_norm)
-                up = np.matmul(h_moe_norm, s_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_moe_norm)
-                situ = situ_glu_forward(gate, up)
+            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
+            gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
+            up = np.matmul(h_moe_norm, s_bundle.up_proj.T) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
+            situ = situ_glu_forward(gate, up)
 
-                gA_d, gB_d, d_situ = bundle.down_lora.compute_lora_gradients(grad_h_mid, situ, s_bundle.down_proj)
-                bundle.down_lora.accumulate_grad(gA_d, gB_d)
+            gA_d, gB_d, d_situ = bundle.shared_down_lora.compute_lora_gradients(grad_h_mid, situ, s_bundle.down_proj)
+            bundle.shared_down_lora.accumulate_grad(gA_d, gB_d)
 
-                if d_situ is not None:
-                    d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_moe_norm, s_bundle.gate_proj)
-                    bundle.gate_lora.accumulate_grad(gA_g, gB_g)
+            if d_situ is not None:
+                d_gate, d_up = situ_glu_backward(d_situ, gate, up)
+                gA_g, gB_g, d_in_g = bundle.shared_gate_lora.compute_lora_gradients(d_gate, h_moe_norm, s_bundle.gate_proj)
+                bundle.shared_gate_lora.accumulate_grad(gA_g, gB_g)
 
-                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_moe_norm, s_bundle.up_proj)
-                    bundle.up_lora.accumulate_grad(gA_u, gB_u)
+                gA_u, gB_u, d_in_u = bundle.shared_up_lora.compute_lora_gradients(d_up, h_moe_norm, s_bundle.up_proj)
+                bundle.shared_up_lora.accumulate_grad(gA_u, gB_u)
 
-                    if d_in_g is not None and d_in_u is not None:
-                        grad_moe_norm += (d_in_g + d_in_u).reshape(orig_shape)
+                if d_in_g is not None and d_in_u is not None:
+                    grad_moe_norm += (d_in_g + d_in_u).reshape(orig_shape)
 
-            h_flat = h_moe_norm.reshape(-1, self.config.model.hidden_size)
-            grad_h_flat = grad_h_mid.reshape(-1, self.config.model.hidden_size)
+            d_h = self.config.model.hidden_size
+            d_l = self.config.model.routed_expert_hidden_size
+            latent_down_w = (np.random.randn(d_l, d_h) * 0.01).astype(np.float32)
+            latent_up_w = (np.random.randn(d_h, d_l) * 0.01).astype(np.float32)
+
+            h_flat = h_moe_norm.reshape(-1, d_h)
+            h_latent = np.matmul(h_flat, latent_down_w.T)
+            grad_flat = grad_h_mid.reshape(-1, d_h)
+            grad_latent_out = np.matmul(grad_flat, latent_up_w)
+            grad_latent_in = np.zeros_like(h_latent)
+
             for exp_id in active_experts:
                 mask = (topk_indices == exp_id)
                 if not np.any(mask):
                     continue
                 e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
-                gate = np.matmul(h_flat, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_flat)
-                up = np.matmul(h_flat, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_flat)
+                gate = np.matmul(h_latent, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_latent)
+                up = np.matmul(h_latent, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_latent)
                 situ = situ_glu_forward(gate, up)
 
-                token_weights = np.sum(topk_weights * mask.astype(np.float32), axis=-1, keepdims=True)
-                d_down_weighted = grad_h_flat * token_weights
+                token_weights = np.sum(topk_weights * mask.astype(np.float32), axis=-1, keepdims=True).reshape(-1, 1)
+                d_down_weighted = grad_latent_out * token_weights
 
                 gA_d, gB_d, d_situ = bundle.down_lora.compute_lora_gradients(d_down_weighted, situ, e_bundle.down_proj)
                 bundle.down_lora.accumulate_grad(gA_d, gB_d)
 
                 if d_situ is not None:
                     d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_flat, e_bundle.gate_proj)
+                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_latent, e_bundle.gate_proj)
                     bundle.gate_lora.accumulate_grad(gA_g, gB_g)
 
-                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_flat, e_bundle.up_proj)
+                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_latent, e_bundle.up_proj)
                     bundle.up_lora.accumulate_grad(gA_u, gB_u)
 
                     if d_in_g is not None and d_in_u is not None:
-                        grad_moe_norm += (d_in_g + d_in_u).reshape(orig_shape)
+                        grad_latent_in += d_in_g + d_in_u
 
+            grad_moe_norm += np.matmul(grad_latent_in, latent_down_w).reshape(orig_shape)
             grad_h_mid += grad_moe_norm
 
             d_v = np.matmul(grad_h_mid, trunk.o_proj)
@@ -615,13 +680,7 @@ class LazyLoRATrainer:
         
         state_dict = {}
         for l, bundle in enumerate(self.lora_layers):
-            for name, mod in [
-                ("q_lora", bundle.q_lora),
-                ("v_lora", bundle.v_lora),
-                ("gate_lora", bundle.gate_lora),
-                ("up_lora", bundle.up_lora),
-                ("down_lora", bundle.down_lora),
-            ]:
+            for name, mod in bundle.all_modules():
                 if mod.lora_A is not None:
                     key_A = f"layers.{l}.{name}.lora_A"
                     key_B = f"layers.{l}.{name}.lora_B"

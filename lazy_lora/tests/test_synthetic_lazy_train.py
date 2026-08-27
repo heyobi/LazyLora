@@ -28,11 +28,20 @@ class TestSyntheticLazyTrain(unittest.TestCase):
         self.config.model.num_experts = 32
         self.config.model.num_experts_per_token = 4
         self.config.model.num_shared_experts = 1
+        self.config.model.moe_intermediate_size = 128
+        # Keep the attention output width equal to the mock hidden size (4 * 128 = 512)
+        self.config.model.num_attention_heads = 4
+        self.config.model.head_dim = 128
         self.config.lora.r = 8
         self.config.lora.lora_alpha = 16
         self.config.training.max_steps = 5
         self.config.training.learning_rate = 1e-3
         self.config.paths.workspace_dir = "/mnt/d/hamza/LazyLora_Workspace"
+        # Point the weight source at an empty mock directory so the streamers fall back to
+        # synthetic tensors with the small test dimensions. Without this the engine silently
+        # mmaps the real 7168-dim Kimi K3 shards and every shape assertion becomes meaningless.
+        self.config.paths.base_model_dir = "/mnt/d/hamza/LazyLora_Workspace/mock_weights"
+        os.makedirs(self.config.paths.base_model_dir, exist_ok=True)
         self.config.paths.ensure_directories()
 
         # Generate test dataset

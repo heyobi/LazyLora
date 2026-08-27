@@ -41,9 +41,19 @@ class SafetensorsIndex:
         if os.path.isdir(model_dir):
             self.build_index()
 
+    def _cache_file(self) -> str:
+        """Index cache path, keyed by model directory.
+
+        A single shared cache file would hand the real Kimi K3 index to every streamer
+        (mock tests included) no matter which directory it was pointed at.
+        """
+        import hashlib
+        key = hashlib.sha1(os.path.abspath(self.model_dir).encode("utf-8")).hexdigest()[:16]
+        return f"/mnt/d/hamza/LazyLora_Workspace/cache/safetensors_index_{key}.json"
+
     def build_index(self) -> None:
         """Scan directory and parse JSON headers of all .safetensors files."""
-        cache_file = "/mnt/d/hamza/LazyLora_Workspace/cache/safetensors_index.json"
+        cache_file = self._cache_file()
         if os.path.exists(cache_file):
             try:
                 with open(cache_file, "r", encoding="utf-8") as f:

@@ -75,6 +75,14 @@ class TestDatasetAndConvergence(unittest.TestCase):
         test_config.model.num_experts = 16
         test_config.model.num_experts_per_token = 4
         test_config.model.num_shared_experts = 1
+        test_config.model.moe_intermediate_size = 128
+        # Attention output width must match the mock hidden size (2 * 128 = 256)
+        test_config.model.num_attention_heads = 2
+        test_config.model.head_dim = 128
+        # Use an empty weight directory so the streamers fall back to synthetic tensors
+        # with these mock dimensions instead of mmapping the real 7168-dim K3 shards.
+        test_config.paths.base_model_dir = os.path.join(test_config.paths.workspace_dir, "mock_weights")
+        os.makedirs(test_config.paths.base_model_dir, exist_ok=True)
 
         trainer = LazyLoRATrainer(test_config)
 
