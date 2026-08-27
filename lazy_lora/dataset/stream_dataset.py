@@ -6,7 +6,7 @@ and batch collation, avoiding loading the dataset into RAM.
 
 import os
 import json
-from typing import Iterator, Dict, Any, List, Optional, Tuple
+from typing import Iterator, Dict, Any, List, Optional, Tuple, Union
 import numpy as np
 
 try:

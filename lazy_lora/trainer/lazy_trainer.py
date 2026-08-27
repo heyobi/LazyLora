@@ -40,6 +40,7 @@ class LoRALayerBundle:
         self,
         layer_idx: int,
         hidden_size: int = 7168,
+        attn_out_size: int = 12288,
         moe_latent_size: int = 3584,
         r: int = 16,
         alpha: int = 32,
@@ -48,8 +49,8 @@ class LoRALayerBundle:
     ):
         self.layer_idx = layer_idx
         # Attention LoRA adapters
-        self.q_lora = LazyLoRALinear(hidden_size, hidden_size, r, alpha, dropout, device)
-        self.v_lora = LazyLoRALinear(hidden_size, hidden_size, r, alpha, dropout, device)
+        self.q_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
+        self.v_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
         
         # MoE Expert LoRA adapters (shared adapter pool or per-expert low rank)
         self.gate_lora = LazyLoRALinear(hidden_size, moe_latent_size, r, alpha, dropout, device)
@@ -92,6 +93,7 @@ class LazyLoRATrainer:
             async_prefetch=self.config.streaming.async_prefetch,
             hidden_size=self.config.model.hidden_size,
             latent_size=self.config.model.routed_expert_hidden_size,
+            moe_intermediate_size=self.config.model.moe_intermediate_size,
         )
         self.act_buffer = ActivationRingBuffer(
             cache_dir=self.config.paths.activation_cache_dir,
@@ -111,6 +113,7 @@ class LazyLoRATrainer:
             LoRALayerBundle(
                 layer_idx=l,
                 hidden_size=self.config.model.hidden_size,
+                attn_out_size=self.config.model.num_attention_heads * self.config.model.head_dim,
                 moe_latent_size=self.config.model.routed_expert_hidden_size,
                 r=self.config.lora.r,
                 alpha=self.config.lora.lora_alpha,
@@ -152,7 +155,7 @@ class LazyLoRATrainer:
         if embed_weight is None:
             # Synthetic embedding table for testing
             if HAS_TORCH:
-                embed_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.float32, device=self.device) * 0.02
+                embed_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
             else:
                 embed_weight = (np.random.randn(vocab_sz, d_hidden) * 0.02).astype(np.float32)
 
@@ -169,7 +172,7 @@ class LazyLoRATrainer:
 
         if head_weight is None:
             if HAS_TORCH:
-                head_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.float32, device=self.device) * 0.02
+                head_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
             else:
                 head_weight = (np.random.randn(vocab_sz, d_hidden) * 0.02).astype(np.float32)
 
@@ -226,70 +229,102 @@ class LazyLoRATrainer:
         if layer_idx + 1 < self.config.model.num_hidden_layers:
             self.expert_streamer.request_prefetch_layer(layer_idx + 1, active_experts)
 
-        # 4. MoE Expert Execution (2 Shared + Active Top-16)
+        # 4. MoE Expert Execution (1 Shared Module + Active Top-16 Routed Experts)
+        # Kimi K3 Latent MoE: h(7168) → down_proj → h_latent(3584) → expert(3584→3072→3584) → up_proj → (7168)
+        # LoRA is NOT applied to MoE experts due to dimension mismatch; applied to attention q/v only.
         if HAS_TORCH and isinstance(h_in, torch.Tensor):
-            moe_out = torch.zeros_like(h_mid)
+            # Shared expert (single module, input=h_moe_norm [7168], output=7168)
+            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
+            s_gate = F.linear(h_moe_norm, s_bundle.gate_proj)
+            s_up = F.linear(h_moe_norm, s_bundle.up_proj)
+            s_situ = situ_glu_forward(s_gate, s_up)
+            shared_out = F.linear(s_situ, s_bundle.down_proj)
+            del s_bundle, s_gate, s_up, s_situ
 
-            # Shared experts
-            for s_idx in range(self.config.model.num_shared_experts):
-                s_bundle = self.expert_streamer.get_expert(layer_idx, s_idx, is_shared=True)
-                gate = F.linear(h_moe_norm, s_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_moe_norm)
-                up = F.linear(h_moe_norm, s_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_moe_norm)
-                situ = situ_glu_forward(gate, up)
-                down = F.linear(situ, s_bundle.down_proj) + bundle.down_lora.forward_lora_only(situ)
-                moe_out = moe_out + down
+            # Latent MoE projections: load routed_expert_down_proj and routed_expert_up_proj
+            prefix = f"model.layers.{layer_idx}.block_sparse_moe."
+            latent_down_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_down_proj.weight", target_device=self.device)
+            latent_up_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_up_proj.weight", target_device=self.device)
+            latent_norm_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_norm.weight", target_device=self.device)
+            d_h = self.config.model.hidden_size          # 7168
+            d_l = self.config.model.routed_expert_hidden_size  # 3584
+            if latent_down_w is None:
+                latent_down_w = torch.randn(d_l, d_h, dtype=torch.bfloat16, device=self.device) * 0.01
+            if latent_up_w is None:
+                latent_up_w = torch.randn(d_h, d_l, dtype=torch.bfloat16, device=self.device) * 0.01
+            if latent_norm_w is None:
+                latent_norm_w = torch.ones(d_l, dtype=torch.bfloat16, device=self.device)
+            if latent_down_w.dtype != torch.bfloat16:
+                latent_down_w = latent_down_w.to(torch.bfloat16)
+            if latent_up_w.dtype != torch.bfloat16:
+                latent_up_w = latent_up_w.to(torch.bfloat16)
 
-            # Routed active experts
-            # For each active expert, compute forward for routed tokens
+            # Project h_moe_norm (7168) → h_latent (3584) for routed experts
             N, top_k = topk_indices.shape
-            h_flat = h_moe_norm.view(-1, self.config.model.hidden_size)
-            
+            h_flat = h_moe_norm.view(-1, d_h)
+            h_latent = F.linear(h_flat, latent_down_w)  # [N, 3584]
+            del latent_down_w
+
+            # Run routed experts in latent space (3584 → 3072 → 3584)
+            routed_latent_out = torch.zeros(h_latent.shape[0], d_l, dtype=h_latent.dtype, device=self.device)
+
             for exp_id in active_experts:
                 mask = (topk_indices == exp_id)  # [N, top_k]
                 if not mask.any():
                     continue
-                
-                # Expert bundle
+
                 e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
-                
-                gate = F.linear(h_flat, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_flat)
-                up = F.linear(h_flat, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_flat)
-                situ = situ_glu_forward(gate, up)
-                down = F.linear(situ, e_bundle.down_proj) + bundle.down_lora.forward_lora_only(situ)
+                e_gate = F.linear(h_latent, e_bundle.gate_proj)   # [N, 3072]
+                e_up = F.linear(h_latent, e_bundle.up_proj)       # [N, 3072]
+                e_situ = situ_glu_forward(e_gate, e_up)
+                e_down = F.linear(e_situ, e_bundle.down_proj)     # [N, 3584]
+                del e_bundle, e_gate, e_up, e_situ
 
-                # Weight by routing coefficient
-                # Find matching token weights
-                token_weights = (topk_weights * mask.float()).sum(dim=-1, keepdim=True)  # [N, 1]
-                weighted_down = down * token_weights
-                moe_out = moe_out + weighted_down.view_as(h_mid)
+                token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
+                routed_latent_out = routed_latent_out + e_down * token_weights
+                del e_down
 
+            # Apply latent norm then project back: (3584) → (7168)
+            routed_latent_out = RMSNormFunction.forward(routed_latent_out, latent_norm_w)
+            routed_out = F.linear(routed_latent_out, latent_up_w)  # [N, 7168]
+            del latent_up_w, latent_norm_w, routed_latent_out, h_latent
+
+            moe_out = shared_out + routed_out.view_as(h_mid)
             h_out = h_mid + moe_out
         else:
-            moe_out = np.zeros_like(h_mid)
-            # Shared experts
-            for s_idx in range(self.config.model.num_shared_experts):
-                s_bundle = self.expert_streamer.get_expert(layer_idx, s_idx, is_shared=True)
-                gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_moe_norm)
-                up = np.matmul(h_moe_norm, s_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_moe_norm)
-                situ = situ_glu_forward(gate, up)
-                down = np.matmul(situ, s_bundle.down_proj.T) + bundle.down_lora.forward_lora_only(situ)
-                moe_out = moe_out + down
+            # NumPy path
+            # Shared expert
+            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
+            s_gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T)
+            s_up = np.matmul(h_moe_norm, s_bundle.up_proj.T)
+            s_situ = situ_glu_forward(s_gate, s_up)
+            shared_out = np.matmul(s_situ, s_bundle.down_proj.T)
 
-            h_flat = h_moe_norm.reshape(-1, self.config.model.hidden_size)
+            # Latent MoE projections
+            d_h = self.config.model.hidden_size
+            d_l = self.config.model.routed_expert_hidden_size
+            h_flat = h_moe_norm.reshape(-1, d_h)
+            latent_down_w = (np.random.randn(d_l, d_h) * 0.01).astype(np.float32)
+            latent_up_w = (np.random.randn(d_h, d_l) * 0.01).astype(np.float32)
+            h_latent = np.matmul(h_flat, latent_down_w.T)
+
+            routed_latent_out = np.zeros((h_latent.shape[0], d_l), dtype=np.float32)
             for exp_id in active_experts:
                 mask = (topk_indices == exp_id)
                 if not np.any(mask):
                     continue
                 e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
-                gate = np.matmul(h_flat, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_flat)
-                up = np.matmul(h_flat, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_flat)
-                situ = situ_glu_forward(gate, up)
-                down = np.matmul(situ, e_bundle.down_proj.T) + bundle.down_lora.forward_lora_only(situ)
-                
-                token_weights = np.sum(topk_weights * mask.astype(np.float32), axis=-1, keepdims=True)
-                weighted_down = down * token_weights
-                moe_out = moe_out + weighted_down.reshape(h_mid.shape)
+                e_gate = np.matmul(h_latent, e_bundle.gate_proj.T)
+                e_up = np.matmul(h_latent, e_bundle.up_proj.T)
+                e_situ = situ_glu_forward(e_gate, e_up)
+                e_down = np.matmul(e_situ, e_bundle.down_proj.T)
 
+                token_weights = np.sum(topk_weights * mask.astype(np.float32), axis=-1, keepdims=True)
+                routed_latent_out = routed_latent_out + e_down * token_weights
+
+            routed_out = np.matmul(routed_latent_out, latent_up_w.T)
+
+            moe_out = shared_out + routed_out.reshape(h_mid.shape)
             h_out = h_mid + moe_out
 
         # 5. Evict layer expert weights from memory
@@ -497,40 +532,55 @@ class LazyLoRATrainer:
         num_layers = self.config.model.num_hidden_layers
 
         # 1. Embed tokens
-        h_current = self._embed_tokens(input_ids)
-        last_active_experts = []
+        if HAS_TORCH:
+            no_grad_ctx = torch.no_grad()
+            no_grad_ctx.__enter__()
 
-        # 2. Sequential Layer-by-Layer Forward Pass (Layer 0 -> Layer L-1)
-        for l in range(num_layers):
-            h_current, last_active_experts = self.forward_layer(l, h_current)
+        try:
+            h_current = self._embed_tokens(input_ids)
+            last_active_experts = []
 
-        # 3. Final LM Head Projection and Loss
-        logits = self._project_lm_head(h_current)
-        loss_val, grad_logits = compute_cross_entropy_loss(
-            logits,
-            target_ids,
-            ignore_index=self.config.model.pad_token_id,
-        )
+            # 2. Sequential Layer-by-Layer Forward Pass (Layer 0 -> Layer L-1)
+            for l in range(num_layers):
+                if l % 5 == 0 or l == num_layers - 1:
+                    print(f"\r  ⚡ [FORWARD PASS] Layer {l+1:02d}/{num_layers} (MoE Stream)", end="", flush=True)
+                h_current, last_active_experts = self.forward_layer(l, h_current)
 
-        # 4. Out-of-Core Real Reverse Backward Pass (Layer L-1 -> Layer 0)
-        # Backprop through LM head projection
-        head_weight = self.mmap_streamer.load_tensor("lm_head.weight", target_device=self.device)
-        if head_weight is None:
-            vocab_sz = self.config.model.vocab_size
-            d_hidden = self.config.model.hidden_size
-            if HAS_TORCH and isinstance(logits, torch.Tensor):
-                head_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.float32, device=self.device) * 0.02
+            print(f"\r  ⚡ [FORWARD COMPLETE] (93 Layers) -> Computing LM Head Cross-Entropy Loss...", end="", flush=True)
+            # 3. Final LM Head Projection and Loss
+            logits = self._project_lm_head(h_current)
+            loss_val, grad_logits = compute_cross_entropy_loss(
+                logits,
+                target_ids,
+                ignore_index=self.config.model.pad_token_id,
+            )
+
+            # 4. Out-of-Core Real Reverse Backward Pass (Layer L-1 -> Layer 0)
+            # Backprop through LM head projection
+            head_weight = self.mmap_streamer.load_tensor("lm_head.weight", target_device=self.device)
+            if head_weight is None:
+                vocab_sz = self.config.model.vocab_size
+                d_hidden = self.config.model.hidden_size
+                if HAS_TORCH and isinstance(logits, torch.Tensor):
+                    head_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
+                else:
+                    head_weight = (np.random.randn(vocab_sz, d_hidden) * 0.02).astype(np.float32)
+
+            if HAS_TORCH and isinstance(grad_logits, torch.Tensor):
+                grad_h = F.linear(grad_logits.to(head_weight.dtype), head_weight.t())
             else:
-                head_weight = (np.random.randn(vocab_sz, d_hidden) * 0.02).astype(np.float32)
+                grad_h = np.matmul(grad_logits, head_weight)
 
-        if HAS_TORCH and isinstance(grad_logits, torch.Tensor):
-            grad_h = F.linear(grad_logits, head_weight.t())
-        else:
-            grad_h = np.matmul(grad_logits, head_weight)
+            # Sequential reverse backward pass through all 93 layers reading activations from D: SSD
+            for l in range(num_layers - 1, -1, -1):
+                if l % 5 == 0 or l == 0:
+                    print(f"\r  ⚡ [BACKWARD PASS] Layer {l+1:02d}/{num_layers} (Grad Stream)", end="", flush=True)
+                grad_h = self.backward_layer(l, grad_h)
+            print("\r" + " " * 80 + "\r", end="", flush=True)
 
-        # Sequential reverse backward pass through all 93 layers reading activations from D: SSD
-        for l in range(num_layers - 1, -1, -1):
-            grad_h = self.backward_layer(l, grad_h)
+        finally:
+            if HAS_TORCH:
+                no_grad_ctx.__exit__(None, None, None)
 
         # 5. Optimizer Step
         current_lr = self.optimizer.step()
@@ -589,3 +639,86 @@ class LazyLoRATrainer:
             np.savez_compressed(ckpt_path.replace(".pt", ".npz"), **state_dict)
 
         return ckpt_path
+
+    def train(self, num_steps: Optional[int] = None) -> List[float]:
+        """
+        Executes full LazyLoRA Out-of-Core training loop.
+        Streams Turkish training dataset, processes micro-batches, updates weights,
+        renders real-time dashboard, and periodically saves checkpoints.
+        """
+        from lazy_lora.dataset.turkish_dataset import TurkishDatasetManager
+        from lazy_lora.dataset.stream_dataset import StreamingDatasetIterator
+
+        target_steps = num_steps or self.config.training.max_steps
+        dataset_mgr = TurkishDatasetManager(self.config.paths.dataset_dir)
+        train_file = dataset_mgr.train_file
+        if not os.path.exists(train_file):
+            print(f"[*] Turkish dataset not found, generating curated dataset at: {train_file}")
+            dataset_mgr.generate_curated_samples(target_samples=max(200, target_steps * 2))
+
+        iterator = StreamingDatasetIterator(
+            jsonl_path=train_file,
+            max_seq_len=self.config.training.max_seq_len,
+            pad_token_id=self.config.model.pad_token_id,
+            eos_token_id=self.config.model.eos_token_id,
+            bos_token_id=self.config.model.bos_token_id,
+        )
+
+        print("=" * 82)
+        print("  🚀 [STARTING LAZYLORA OUT-OF-CORE TURKISH TRAINING]  🚀")
+        print(f"  Target Steps : {target_steps} | Micro-Batch: {self.config.training.micro_batch_size}")
+        print(f"  Target Device: {self.device.upper()} | Model Layers: {self.config.model.num_hidden_layers}")
+        print(f"  Checkpoints  : {self.config.paths.checkpoints_dir}")
+        print("=" * 82)
+
+        step = 0
+        loss_history = []
+
+        while step < target_steps:
+            for input_ids, target_ids in iterator.get_batches(
+                batch_size=self.config.training.micro_batch_size,
+                as_torch=HAS_TORCH,
+                device=self.device,
+            ):
+                step += 1
+                loss_val = self.train_step(step=step, input_ids=input_ids, target_ids=target_ids)
+                loss_history.append(loss_val)
+
+                if step % self.config.training.save_steps == 0:
+                    saved_path = self.save_lora_checkpoint(step)
+                    print(f"\n💾 [CHECKPOINT SAVED] Step {step:05d} -> {saved_path}")
+
+                if step >= target_steps:
+                    break
+
+        final_ckpt = self.save_lora_checkpoint(step)
+        print("\n" + "=" * 82)
+        print(f"🎉 [TRAINING COMPLETE] {step} Steps Executed Successfully!")
+        print(f" Final LoRA Adapter Checkpoint: {final_ckpt}")
+        print("=" * 82)
+        return loss_history
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="LazyLoRA Kimi K3 Training Runner")
+    parser.add_argument("--steps", type=int, default=50, help="Number of training steps")
+    parser.add_argument("--device", default=None, help="Device override (cuda:0 / cpu)")
+    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    args = parser.parse_args()
+
+    cfg = get_default_config()
+    if args.steps:
+        cfg.training.max_steps = args.steps
+    if args.lr:
+        cfg.training.learning_rate = args.lr
+    if args.device:
+        cfg.streaming.device = args.device
+
+    trainer = LazyLoRATrainer(config=cfg)
+    trainer.train(num_steps=args.steps)
+
+
+if __name__ == "__main__":
+    main()
+

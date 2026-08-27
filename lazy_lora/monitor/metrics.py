@@ -156,4 +156,14 @@ class MetricsTracker:
         self.history.append(m)
         if len(self.history) > 1000:
             self.history.pop(0)
+
+        # Dump live snapshot for real-time monitoring
+        try:
+            import json
+            from dataclasses import asdict
+            with open("/mnt/d/hamza/LazyLora_Workspace/cache/live_metrics.json", "w", encoding="utf-8") as f:
+                json.dump(asdict(m), f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
         return m

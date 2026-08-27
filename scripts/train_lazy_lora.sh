@@ -15,6 +15,7 @@ export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
 export HF_HOME="/mnt/d/hamza/LazyLora_Workspace/cache/huggingface"
 export TORCH_HOME="/mnt/d/hamza/LazyLora_Workspace/cache/torch"
 export TMPDIR="/mnt/d/hamza/LazyLora_Workspace/cache"
+export PYTHONUNBUFFERED=1
 
 echo "Checking model weight integrity before starting training..."
 MODEL_DIR="/mnt/d/hamza/kimi_k3_model_weights"
@@ -33,4 +34,4 @@ if [ "$SHARD_COUNT" -lt 96 ]; then
 fi
 
 echo "Starting LazyLoRA Out-of-Core MoE Training..."
-"$PYTHON_EXEC" -m lazy_lora.trainer.lazy_trainer
+"$PYTHON_EXEC" -m lazy_lora.trainer.lazy_trainer "$@"

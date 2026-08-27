@@ -66,7 +66,7 @@ class LoRAConfig:
 @dataclass
 class StreamingConfig:
     """Out-of-Core I/O and Memory Buffer Management."""
-    device: str = "cuda:0"                # Target device (cuda:0 or cpu)
+    device: str = "cpu"                   # Target device (cpu or cuda:0)
     max_vram_mb: float = 4608.0           # Strict VRAM cap (under 6GB physical)
     max_ram_gb: float = 6.0               # Strict RAM cap (under 16GB physical)
     async_prefetch: bool = True           # Overlap I/O with compute

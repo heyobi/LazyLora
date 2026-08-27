@@ -80,12 +80,12 @@ class LayerTrunkStreamer:
         if in_norm is None or q_proj is None:
             # Synthetic default for testing/profiling
             if HAS_TORCH:
-                in_norm = torch.ones(d_hidden, dtype=torch.float32, device=self.device)
-                post_norm = torch.ones(d_hidden, dtype=torch.float32, device=self.device)
-                q_proj = torch.randn(d_hidden, d_hidden, dtype=torch.float32, device=self.device) * 0.02
-                k_proj = torch.randn(d_hidden, d_hidden, dtype=torch.float32, device=self.device) * 0.02
-                v_proj = torch.randn(d_hidden, d_hidden, dtype=torch.float32, device=self.device) * 0.02
-                o_proj = torch.randn(d_hidden, d_hidden, dtype=torch.float32, device=self.device) * 0.02
+                in_norm = torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
+                post_norm = torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
+                q_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
+                k_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
+                v_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
+                o_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
             else:
                 in_norm = np.ones(d_hidden, dtype=np.float32)
                 post_norm = np.ones(d_hidden, dtype=np.float32)

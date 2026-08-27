@@ -1,7 +1,7 @@
 """
 Dynamic Expert-Wise Streaming Engine for Out-of-Core MoE Training.
-Loads ONLY active top-k experts and shared experts into GPU/RAM on-demand.
-Implements double buffering (Ring Buffer) and asynchronous prefetch to overlap I/O with GEMM.
+Loads ONLY active top-k experts and shared experts into RAM on-demand.
+Supports INT4 quantized weights (weight_packed + weight_scale) from Kimi K3.
 """
 
 import os
@@ -38,10 +38,57 @@ class ExpertWeightBundle:
         self.down_proj = down_proj
 
 
+def _dequantize_int4(weight_packed, weight_scale):
+    """
+    Dequantize INT4 packed weights using scale factors.
+    weight_packed: uint8 array with 2 INT4 values per byte
+    weight_scale: bfloat16/float16 scale factors per group
+    Returns: dequantized bfloat16 tensor
+    """
+    if HAS_TORCH and isinstance(weight_packed, torch.Tensor):
+        # Unpack: each byte holds 2 int4 values
+        low = (weight_packed & 0x0F).to(torch.int8) - 8   # signed range [-8, 7]
+        high = ((weight_packed >> 4) & 0x0F).to(torch.int8) - 8
+        # Interleave to reconstruct original order
+        unpacked = torch.stack([low, high], dim=-1).reshape(
+            weight_packed.shape[0], weight_packed.shape[1] * 2
+        ).to(torch.bfloat16)
+        # Apply scale: scale is per-group, broadcast along columns
+        if weight_scale.dim() == 2:
+            # scale shape: [out_features, num_groups] or [out_features, in_features/group_size]
+            group_size = unpacked.shape[1] // weight_scale.shape[1]
+            scale_expanded = weight_scale.repeat_interleave(group_size, dim=1)
+            if scale_expanded.shape[1] > unpacked.shape[1]:
+                scale_expanded = scale_expanded[:, :unpacked.shape[1]]
+            elif scale_expanded.shape[1] < unpacked.shape[1]:
+                # Pad scale to match
+                pad = unpacked.shape[1] - scale_expanded.shape[1]
+                scale_expanded = F.pad(scale_expanded, (0, pad), value=1.0)
+            return unpacked * scale_expanded.to(torch.bfloat16)
+        else:
+            return unpacked * weight_scale.to(torch.bfloat16)
+    else:
+        # NumPy fallback
+        if isinstance(weight_packed, np.ndarray):
+            low = (weight_packed & 0x0F).astype(np.int8) - 8
+            high = ((weight_packed >> 4) & 0x0F).astype(np.int8) - 8
+            unpacked = np.stack([low, high], axis=-1).reshape(
+                weight_packed.shape[0], weight_packed.shape[1] * 2
+            ).astype(np.float32)
+            if weight_scale.ndim == 2:
+                group_size = unpacked.shape[1] // weight_scale.shape[1]
+                scale_expanded = np.repeat(weight_scale.astype(np.float32), group_size, axis=1)
+                if scale_expanded.shape[1] > unpacked.shape[1]:
+                    scale_expanded = scale_expanded[:, :unpacked.shape[1]]
+                return unpacked * scale_expanded
+            return unpacked * weight_scale.astype(np.float32)
+        return weight_packed
+
+
 class DynamicExpertStreamer:
     """
     Expert-Wise Dynamic Streamer for Kimi K3 MoE layers.
-    Maintains a bounded resident cache of expert weights (strictly <= max_resident_experts).
+    Zero-cache mode: loads each expert from mmap on-demand and discards immediately.
     """
 
     def __init__(
@@ -52,6 +99,7 @@ class DynamicExpertStreamer:
         async_prefetch: bool = True,
         hidden_size: int = 7168,
         latent_size: int = 3584,
+        moe_intermediate_size: int = 3072,
     ):
         self.mmap_streamer = mmap_streamer
         self.device = device
@@ -59,103 +107,83 @@ class DynamicExpertStreamer:
         self.async_prefetch = async_prefetch
         self.hidden_size = hidden_size
         self.latent_size = latent_size
-
-        # Thread-safe buffer pool
-        self._expert_cache: Dict[Tuple[int, int], ExpertWeightBundle] = {}  # (layer_idx, expert_idx) -> bundle
-        self._prefetch_queue: queue.Queue = queue.Queue(maxsize=32)
-        self._stop_worker = False
-
-        if self.async_prefetch:
-            self._worker_thread = threading.Thread(target=self._prefetch_worker, daemon=True)
-            self._worker_thread.start()
-        else:
-            self._worker_thread = None
+        self.moe_intermediate_size = moe_intermediate_size
 
     def _load_single_expert(self, layer_idx: int, expert_idx: int, is_shared: bool = False) -> ExpertWeightBundle:
-        """Load gate, up, down projections for an expert from mmap."""
+        """
+        Load gate (w1), up (w3), down (w2) projections for an expert from mmap.
+        Kimi K3 naming:
+          Routed: model.layers.{L}.block_sparse_moe.experts.{E}.w1/w2/w3.weight_packed/weight_scale
+          Shared: model.layers.{L}.block_sparse_moe.shared_experts.gate_proj/up_proj/down_proj.weight
+        """
         if is_shared:
-            prefix = f"model.layers.{layer_idx}.moe.shared_experts.{expert_idx}."
+            # Shared experts are a single module (not indexed), with full-precision weights
+            prefix = f"model.layers.{layer_idx}.block_sparse_moe.shared_experts."
+            gate = self.mmap_streamer.load_tensor(f"{prefix}gate_proj.weight", target_device=self.device)
+            up = self.mmap_streamer.load_tensor(f"{prefix}up_proj.weight", target_device=self.device)
+            down = self.mmap_streamer.load_tensor(f"{prefix}down_proj.weight", target_device=self.device)
         else:
-            prefix = f"model.layers.{layer_idx}.moe.experts.{expert_idx}."
+            # Routed experts: INT4 quantized (weight_packed + weight_scale)
+            prefix = f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}."
 
-        gate_name = f"{prefix}gate_proj.weight"
-        up_name = f"{prefix}up_proj.weight"
-        down_name = f"{prefix}down_proj.weight"
+            # Try INT4 packed format first
+            w1_packed = self.mmap_streamer.load_tensor(f"{prefix}w1.weight_packed", target_device=self.device)
+            w1_scale = self.mmap_streamer.load_tensor(f"{prefix}w1.weight_scale", target_device=self.device)
+            w2_packed = self.mmap_streamer.load_tensor(f"{prefix}w2.weight_packed", target_device=self.device)
+            w2_scale = self.mmap_streamer.load_tensor(f"{prefix}w2.weight_scale", target_device=self.device)
+            w3_packed = self.mmap_streamer.load_tensor(f"{prefix}w3.weight_packed", target_device=self.device)
+            w3_scale = self.mmap_streamer.load_tensor(f"{prefix}w3.weight_scale", target_device=self.device)
 
-        gate = self.mmap_streamer.load_tensor(gate_name, target_device=self.device)
-        up = self.mmap_streamer.load_tensor(up_name, target_device=self.device)
-        down = self.mmap_streamer.load_tensor(down_name, target_device=self.device)
-
-        # If model shards are not yet present, generate deterministic synthetic weights for testing
-        if gate is None or up is None or down is None:
-            d_hidden = self.hidden_size
-            d_latent = self.latent_size
-            if HAS_TORCH:
-                gate = torch.randn(d_latent, d_hidden, dtype=torch.float32, device=self.device) * 0.02
-                up = torch.randn(d_latent, d_hidden, dtype=torch.float32, device=self.device) * 0.02
-                down = torch.randn(d_hidden, d_latent, dtype=torch.float32, device=self.device) * 0.02
+            if w1_packed is not None and w1_scale is not None:
+                gate = _dequantize_int4(w1_packed, w1_scale)
+                down = _dequantize_int4(w2_packed, w2_scale)
+                up = _dequantize_int4(w3_packed, w3_scale)
             else:
-                gate = (np.random.randn(d_latent, d_hidden) * 0.02).astype(np.float32)
-                up = (np.random.randn(d_latent, d_hidden) * 0.02).astype(np.float32)
-                down = (np.random.randn(d_hidden, d_latent) * 0.02).astype(np.float32)
+                # Fallback: try full-precision names
+                gate = self.mmap_streamer.load_tensor(f"{prefix}w1.weight", target_device=self.device)
+                down = self.mmap_streamer.load_tensor(f"{prefix}w2.weight", target_device=self.device)
+                up = self.mmap_streamer.load_tensor(f"{prefix}w3.weight", target_device=self.device)
+
+        # Synthetic fallback with CORRECT dimensions for testing
+        if gate is None or up is None or down is None:
+            if is_shared:
+                # Shared expert: intermediate_size = moe_intermediate_size * num_shared_experts
+                d_in = self.hidden_size           # 7168
+                d_mid = self.moe_intermediate_size * 2  # 3072*2 = 6144
+            else:
+                # Routed expert: operates in latent space
+                d_in = self.latent_size            # 3584
+                d_mid = self.moe_intermediate_size # 3072
+
+            if HAS_TORCH:
+                gate = torch.randn(d_mid, d_in, dtype=torch.bfloat16, device=self.device) * 0.01
+                up = torch.randn(d_mid, d_in, dtype=torch.bfloat16, device=self.device) * 0.01
+                down = torch.randn(d_in, d_mid, dtype=torch.bfloat16, device=self.device) * 0.01
+            else:
+                gate = (np.random.randn(d_mid, d_in) * 0.01).astype(np.float32)
+                up = (np.random.randn(d_mid, d_in) * 0.01).astype(np.float32)
+                down = (np.random.randn(d_in, d_mid) * 0.01).astype(np.float32)
+
+        # Ensure bfloat16 dtype
+        if HAS_TORCH and isinstance(gate, torch.Tensor) and gate.dtype != torch.bfloat16:
+            gate = gate.to(torch.bfloat16)
+            up = up.to(torch.bfloat16)
+            down = down.to(torch.bfloat16)
 
         return ExpertWeightBundle(expert_idx, gate, up, down)
 
-    def _prefetch_worker(self) -> None:
-        """Background thread prefetching next requested experts."""
-        while not self._stop_worker:
-            try:
-                task = self._prefetch_queue.get(timeout=0.1)
-                if task is None:
-                    break
-                layer_idx, expert_idx, is_shared = task
-                key = (layer_idx, expert_idx)
-                if key not in self._expert_cache:
-                    bundle = self._load_single_expert(layer_idx, expert_idx, is_shared)
-                    self._expert_cache[key] = bundle
-                self._prefetch_queue.task_done()
-            except queue.Empty:
-                continue
-            except Exception:
-                pass
-
     def request_prefetch_layer(self, layer_idx: int, active_experts: List[int], include_shared: bool = True) -> None:
-        """Queue prefetch requests for next layer's active experts."""
-        if not self.async_prefetch:
-            return
-        if include_shared:
-            for s_idx in range(2):
-                try:
-                    self._prefetch_queue.put_nowait((layer_idx, s_idx, True))
-                except queue.Full:
-                    break
-        for e_idx in active_experts:
-            try:
-                self._prefetch_queue.put_nowait((layer_idx, e_idx, False))
-            except queue.Full:
-                break
+        """No-op in zero-cache mode to prevent RAM bloat."""
+        pass
 
     def get_expert(self, layer_idx: int, expert_idx: int, is_shared: bool = False) -> ExpertWeightBundle:
-        """Fetch expert bundle, using prefetched cache if ready or loading synchronously."""
-        key = (layer_idx, expert_idx)
-        if key in self._expert_cache:
-            return self._expert_cache[key]
-        bundle = self._load_single_expert(layer_idx, expert_idx, is_shared)
-        self._expert_cache[key] = bundle
-        return bundle
+        """Fetch expert bundle on-demand from zero-copy mmap."""
+        return self._load_single_expert(layer_idx, expert_idx, is_shared)
 
     def evict_layer_experts(self, layer_idx: int) -> None:
-        """Evict all resident experts belonging to layer_idx to keep memory bounded."""
-        keys_to_remove = [k for k in self._expert_cache if k[0] == layer_idx]
-        for k in keys_to_remove:
-            del self._expert_cache[k]
-
-        if HAS_TORCH and torch.cuda.is_available() and self.device.startswith("cuda"):
-            torch.cuda.empty_cache()
+        """No-op in zero-cache mode (nothing to evict)."""
+        import gc
+        gc.collect()
 
     def close(self) -> None:
-        self._stop_worker = True
-        if self._worker_thread and self._worker_thread.is_alive():
-            self._prefetch_queue.put(None)
-            self._worker_thread.join(timeout=1.0)
-        self._expert_cache.clear()
+        pass

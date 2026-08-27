@@ -43,6 +43,17 @@ class SafetensorsIndex:
 
     def build_index(self) -> None:
         """Scan directory and parse JSON headers of all .safetensors files."""
+        cache_file = "/mnt/d/hamza/LazyLora_Workspace/cache/safetensors_index.json"
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached_data = json.load(f)
+                    self.tensor_locations = {k: tuple(v) for k, v in cached_data.items()}
+                self._index_built = True
+                return
+            except Exception:
+                pass
+
         shard_files = sorted([
             f for f in os.listdir(self.model_dir)
             if f.endswith(".safetensors")
@@ -81,20 +92,42 @@ class SafetensorsIndex:
             except Exception:
                 continue
 
+        try:
+            os.makedirs(os.path.dirname(cache_file), exist_ok=True)
+            with open(cache_file, "w", encoding="utf-8") as f:
+                json.dump(self.tensor_locations, f)
+        except Exception:
+            pass
+
         self._index_built = True
 
+    def _resolve_name(self, tensor_name: str) -> Optional[str]:
+        if tensor_name in self.tensor_locations:
+            return tensor_name
+        for prefix in ["language_model.", "model.", "language_model.model."]:
+            cand = prefix + tensor_name
+            if cand in self.tensor_locations:
+                return cand
+            if tensor_name.startswith("model."):
+                cand2 = "language_model." + tensor_name
+                if cand2 in self.tensor_locations:
+                    return cand2
+        return None
+
     def has_tensor(self, tensor_name: str) -> bool:
-        return tensor_name in self.tensor_locations
+        return self._resolve_name(tensor_name) is not None
 
     def list_tensors_for_layer(self, layer_idx: int) -> List[str]:
         """Find all tensor names belonging to layer_idx."""
-        prefix = f"model.layers.{layer_idx}."
-        return [t for t in self.tensor_locations if t.startswith(prefix)]
+        prefix1 = f"model.layers.{layer_idx}."
+        prefix2 = f"language_model.model.layers.{layer_idx}."
+        return [t for t in self.tensor_locations if t.startswith(prefix1) or t.startswith(prefix2)]
 
     def list_expert_tensors(self, layer_idx: int, expert_idx: int) -> List[str]:
         """Find tensors for specific expert in layer_idx."""
-        prefix = f"model.layers.{layer_idx}.moe.experts.{expert_idx}."
-        return [t for t in self.tensor_locations if t.startswith(prefix)]
+        prefix1 = f"model.layers.{layer_idx}.moe.experts.{expert_idx}."
+        prefix2 = f"language_model.model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}."
+        return [t for t in self.tensor_locations if t.startswith(prefix1) or t.startswith(prefix2)]
 
 
 class MmapTensorStreamer:
@@ -125,10 +158,11 @@ class MmapTensorStreamer:
         """
         Extracts a single tensor directly from disk via mmap.
         """
-        if not self.index.has_tensor(tensor_name):
+        resolved_name = self.index._resolve_name(tensor_name)
+        if resolved_name is None:
             return None
 
-        shard_path, start, end, shape, dtype_str = self.index.tensor_locations[tensor_name]
+        shard_path, start, end, shape, dtype_str = self.index.tensor_locations[resolved_name]
         mm = self._get_mmap(shard_path)
 
         # Slice raw bytes view without copying entire file
