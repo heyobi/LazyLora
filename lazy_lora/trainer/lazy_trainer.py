@@ -321,6 +321,20 @@ class LazyLoRATrainer:
                 grad_h = part if grad_h is None else grad_h + part
             return grad_h
 
+    def _route(self, layer_idx: int, h_moe_norm):
+        """
+        Run this layer's MoE gate.
+
+        Every layer carries its own gate matrix and score-correction bias on disk; without
+        them the router falls back to its random init, which selects experts at random.
+        """
+        prefix = f"model.layers.{layer_idx}.block_sparse_moe.gate."
+        gate_w = self.mmap_streamer.load_tensor(f"{prefix}weight", target_device=self.device)
+        gate_b = self.mmap_streamer.load_tensor(f"{prefix}e_score_correction_bias", target_device=self.device)
+        topk_indices, topk_weights = self.router.forward(h_moe_norm, weight=gate_w, bias=gate_b)
+        del gate_w, gate_b
+        return topk_indices, topk_weights
+
     def _attention_forward(self, layer_idx: int, bundle, h_norm):
         """
         Run the layer's real attention sublayer.
@@ -506,7 +520,7 @@ class LazyLoRATrainer:
 
         # 3. MoE Routing
         h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-        topk_indices, topk_weights = self.router.forward(h_moe_norm)
+        topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
         active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
 
         # Prefetch active experts for next layer if applicable
@@ -706,7 +720,7 @@ class LazyLoRATrainer:
 
             # Recompute MoE forward states
             h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-            topk_indices, topk_weights = self.router.forward(h_moe_norm)
+            topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
             active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
 
             # MoE Backward (Kimi K3 Latent MoE), mirroring the forward pass exactly:
@@ -805,7 +819,7 @@ class LazyLoRATrainer:
             h_mid = h_in + attn_out
 
             h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-            topk_indices, topk_weights = self.router.forward(h_moe_norm)
+            topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
             active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
 
             # MoE Backward: same structure as the torch path (shared dense expert +

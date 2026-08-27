@@ -162,3 +162,164 @@ Spekülatif hızlandırmayı deterministik şablonlardan tam dinamik nöral ağa
   * Kümülatif log-olasılık ($\sum \log P$) sıralı Min-Heap öncelik kuyruğu.
   * SSD geçişi esnasında arka planda durmaksızın binlerce tokenlik ağaç dalları üreten GPU destekli sürekli üretim hattı.
 
+---
+
+## 10. Donanım Gerçeğinin Düzeltilmesi: Disk NVMe Değil, Mekanik
+
+Bu belgenin önceki bölümlerinde depolama "NVMe / SSD" olarak kayda geçmişti. Windows sorgusu bunun yanlış olduğunu gösterdi:
+
+```
+Get-Disk → Number 1 | WDC WD20EZBX-00AYRA0 | SATA | 1863 GB
+```
+
+* **WD20EZBX**, 7200 rpm **mekanik sabit disktir** (WD Blue serisi), NVMe SSD değildir.
+* Ölçülen 50–97 MB/sn okuma hızları ve rastgele erişimde düşen **~30 MB/sn** verim tam olarak bu donanımla uyumludur.
+* Bu düzeltme, tüm zaman projeksiyonlarının temelini değiştirir: `Bölüm 6`'daki 27,5 dakikalık token süresi bir SSD darboğazı değil, **mekanik disk darboğazıdır**.
+
+### Sistem Kararlılığı Bulgusu (Kritik)
+
+Uzun akış testleri sırasında sistem üç kez çöktü. Olay günlüğü kök nedeni verdi:
+
+| Olay | Kod | Anlamı |
+| :--- | :--- | :--- |
+| `Microsoft-Windows-WER-SystemErrorReporting` | `0x0000001A` | MEMORY_MANAGEMENT mavi ekranı |
+| `disk` (Event 154) | — | Disk 1 için G/Ç işlemi **donanım hatasından** başarısız |
+| `Kernel-Power` | `41` | Sistem düzgün kapatılmadan yeniden başladı |
+
+Çökmelerden sonra D: diski bir süre sistemden tamamen kayboldu. **Kök neden GPU güç beslemesiydi:** GTX 980 Ti'nin güç kablolarından biri çıkarıldıktan sonra çökmeler tamamen durdu. Eğitim zaten CPU üzerinde koştuğu için bu, hesaplama kapasitesinde kayba yol açmamıştır.
+
+---
+
+## 11. Deney 5: Motorun Gerçek Kimi K3 Mimarisiyle Karşılaştırılması
+
+Eğitim motoru ilk kez gerçek ağırlıklar üzerinde adım adım denetlendi. Model dizinindeki `config.json` ve `modeling_kimi_linear.py` referans alındığında, motorun modeli **üç temel noktada yanlış temsil ettiği** bulundu.
+
+### 11.1 Dikkat Katmanı Hiç Uygulanmamıştı
+
+Motorun dikkat bloğu şuydu:
+
+```python
+q = F.linear(h_norm, trunk.q_proj) + q_lora(h_norm)   # hesaplanıyor
+k = F.linear(h_norm, trunk.k_proj)                     # hesaplanıyor
+attn_out = F.linear(v, trunk.o_proj)                   # q ve k ÇÖPE ATILIYOR
+```
+
+* Hiçbir dikkat mekanizması yoktu; `o_proj(v)` çıktı olarak kullanılıyordu.
+* `q_lora`, çıktıyı hiç etkilemeyen bir matrisi eğitiyordu; geri geçişte ona `v`'nin gradyanı besleniyordu.
+
+**Gerçek mimari (config.json):** Model `kimi_linear` tipinde **hibrittir**:
+
+| Katman tipi | Adet | 0-tabanlı indeksler | Mekanizma |
+| :--- | :--- | :--- | :--- |
+| **KDA** (Kimi Delta Attention) | 69 | 0,1,2,4,5,6,8,… | Kapılı delta-kuralı doğrusal dikkat |
+| **MLA** (Multi-head Latent Attention) | 24 | 3,7,11,…,91,92 | Latent q/kv sıkıştırmalı tam dikkat |
+
+> Not: `config.json`'daki `full_attn_layers` listesi **1-tabanlıdır**; 0-tabanlı karşılığı `değer − 1`'dir. Katman 3'ün diskteki tensörleri (`q_a_proj`, `kv_a_proj_with_mqa`) bunu doğrular.
+
+**KDA'nın kesin formu** (`A_log` şekli `[128]`, yani baş başına değil **kanal başına** sönüm):
+
+$$g_t = -e^{A_{\log}} \cdot \operatorname{softplus}(f_b(f_a(h_t)) + b_{dt}), \qquad \alpha_t = e^{\max(g_t,\,-5)}$$
+$$S_t = S_{t-1}\operatorname{diag}(\alpha_t) + \beta_t\,k_t\,(v_t - S_{t-1}^\top \operatorname{diag}(\alpha_t) k_t)^\top, \qquad o_t = S_t^\top q_t$$
+
+q, k üzerinde L2 normalizasyon; $\beta_t = \sigma(b_{proj}(h_t))$; q/k/v üzerinde kernel=4 nedensel derinlemesine konvolüsyon (SiLU); çıkışta sigmoid-kapılı RMSNorm.
+
+**Uygulama notu:** Referans bu özyinelemeyi `fla` kütüphanesinin Triton çekirdeklerine devrediyor. Triton, GTX 980 Ti'nin hesaplama yeteneğinin (CC 5.2) üzerinde bir eşik ister ve CPU'da hiç çalışmaz. Bu nedenle özyineleme saf PyTorch ile yeniden yazıldı ([lazy_lora/core/attention.py](file:///c:/Users/Dell/Desktop/LazyLora/lazy_lora/core/attention.py)).
+
+**Doğrulama (gerçek ağırlıklarla, 16 token):**
+
+| Katman | Tip | Yükleme | Hesap | Çıktı std | Sonlu |
+| :--- | :--- | ---: | ---: | ---: | :---: |
+| 1 | KDA | 11,3 s | 1,9 s | 0,0032 | ✅ |
+| 3 | MLA | 5,8 s | 0,5 s | 0,0698 | ✅ |
+
+### 11.2 Uzman Ağırlıkları Yanlış Formatta Çözülüyordu
+
+`config.json` uzmanları şöyle tanımlıyor:
+
+```json
+"format": "mxfp4-pack-quantized", "num_bits": 4, "group_size": 32,
+"type": "float", "scale_dtype": "torch.uint8"
+```
+
+Motor ise bunları **INT4** sanıyordu: her yarım baytı `(b & 0xF) − 8` ile tamsayıya çeviriyor ve ölçek baytını **doğrudan çarpan** olarak kullanıyordu. Oysa:
+
+* Her yarım bayt bir **FP4 (E2M1)** kodudur: işaret biti + $\{0, 0.5, 1, 1.5, 2, 3, 4, 6\}$ tablosuna 3-bit indeks.
+* Ölçek baytı bir **E8M0 üssüdür**; çarpan $2^{(s-127)}$'dir. Diskteki değerler 112–122 aralığında, yani çarpan $2^{-15}\dots2^{-5}$.
+
+Ölçek baytları (112–122) doğrudan çarpan sanıldığı için uzman ağırlıkları **yaklaşık 30.000 kat şişmiş ve işaretleri bozulmuş** durumdaydı.
+
+**Doğrulama** — aynı katmandaki kuantize *olmayan* paylaşılan uzman referans alındı:
+
+| Tensör | absmean | max |
+| :--- | ---: | ---: |
+| Yönlendirilen uzman 0 (MXFP4 çözülmüş) | 0,01946 | 0,1250 |
+| Paylaşılan uzman (bf16, referans) | 0,01494 | 0,1279 |
+
+### 11.3 Yönlendirici (Router) Ağırlıkları Diskten Hiç Okunmuyordu
+
+`KimiK3MoERouter`, gate matrisini `nn.init.normal_(std=0.02)` ile **rastgele** üretiyordu ve 93 katmanın tamamı **tek bir** router örneğini paylaşıyordu. Oysa her katmanın diskte kendi tensörleri var:
+
+* `block_sparse_moe.gate.weight` → `[896, 7168]`
+* `block_sparse_moe.gate.e_score_correction_bias` → `[896]`
+
+Ayrıca referans, düzeltme biasını sigmoid **sonrası skorlara** ve yalnızca *seçim* için ekler; motor ise logits'e ekliyordu.
+
+### 11.4 Katman 0 Yoğun (Dense) Katmandır
+
+`first_k_dense_replace: 1` alanı config'de tanımlıydı ama kodda hiç kullanılmıyordu. Katman 0'da diskte `block_sparse_moe` yoktur; `mlp.gate_proj/up_proj/down_proj` (7168 → 33792 → 7168) vardır. Motor bu katmanı MoE sanıp, diskte var olmayan **518 uzman için rastgele ağırlık üretiyordu**.
+
+---
+
+## 12. Deney 6: Düzeltmeler Sonrası Gerçek Katman Maliyeti
+
+127 token, gerçek ağırlıklar, CPU:
+
+| Ölçüm | Düzeltmeden önce | Düzeltmeden sonra |
+| :--- | ---: | ---: |
+| Katman 0 (dense) | 270,9 s (518 sahte uzman) | **38,9 s** (0 uzman) |
+| Katman 1 (KDA + MoE) | 261,0 s (434 uzman, rastgele router) | **740,1 s** (592 uzman, gerçek router) |
+| Gömme (embedding) | 2,35 GB RAM'e kopyalama | **0,2 s** (satır-bazlı mmap) |
+
+### 🔑 Projenin Temel Varsayımına İlişkin Kritik Bulgu
+
+Gerçek router ağırlıkları devreye girince katman başına okunan **benzersiz uzman sayısı 592/896'ya çıktı**. Yani:
+
+> **"896 uzmandan yalnızca 16'sı okunur" önermesi TOKEN BAŞINA doğrudur, BATCH BAŞINA değil.**
+
+127 token, her biri kendi top-16'sını seçtiğinde birleşim 896 uzmanın üçte ikisine ulaşır. 512 tokenlik gerçek bir eğitim batch'inde pratikte **tüm uzmanlara** dokunulur.
+
+**Katman 3 (MLA) ölçümü:** `516,5 s`, 335 uzman, `h.std = 11,30`.
+
+**Sonuç maliyet:**
+
+$$\text{Adım başına okuma} \approx 896 \times 17{,}5\,\text{MB} \times 92 \approx 1{,}44\,\text{TB}$$
+
+Mekanik diskte ölçülen ~30 MB/sn ile bu, adım başına **20+ saat** demektir.
+
+### Buradaki Fırsat
+
+Madem neredeyse tüm uzmanlar okunuyor, bu bir **sıralı tarama** olmalıdır. Ölçülen 30 MB/sn, diskin sıralı hızının (~150 MB/sn) beşte biridir; çünkü her uzman için 6 ayrı mmap okuması yapılıp aralarda CPU'da MXFP4 çözülmekte, disk sürekli beklemektedir. `expert_streamer.request_prefetch_layer` hâlâ boş bir `no-op`'tur — çift tamponlu asenkron ön-getirme yazıldığında diskin kesintisiz akması ve **3–5 kat hızlanma** beklenmektedir.
+
+---
+
+## 13. AÇIK SORUN: MLA Katmanlarında Aktivasyon Patlaması
+
+Katmanlar arası gizli durum standart sapması:
+
+| Katman | Tip | `h.std` |
+| :--- | :--- | ---: |
+| 0 | dense / KDA | 0,0299 |
+| 1 | MoE / KDA | 0,0540 |
+| 3 | MoE / **MLA** | **11,3044** |
+
+KDA katmanları sağlıklı ilerlerken MLA katmanı çıkışı ~200 kat büyütüyor. Doğru yönlendirici ağırlıkları devreye alındıktan sonra da devam ettiği için sebep yönlendirme değil.
+
+**Birincil şüpheli: uygulanmayan blok-artık (block residual) mekanizması.** `config.json` `"attn_res_block_size": 12` tanımlıyor ve her katmanda diskte şu tensörler duruyor:
+
+* `self_attention_res_norm.weight`, `self_attention_res_proj.weight` → `[1, 7168]`
+* `mlp_res_norm.weight`, `mlp_res_proj.weight` → `[1, 7168]`
+
+Referans `KimiDecoderLayer._forward_attn_residual`, her 12 katmanda bir gizli durumu bir "blok artık bankasına" yazar ve öğrenilmiş skaler kapılarla artık akışını yeniden ölçekler. Motorumuzda bu mekanizma **hiç yok**; artık akışı $h + \text{attn} + \text{moe}$ olarak dizginsiz büyüyor. Bu, tam olarak aktivasyon büyümesini denetleyen mekanizmadır.
+
+Bu düzeltilmeden yapılacak bir eğitim adımı anlamlı bir loss üretmeyecektir.
+
