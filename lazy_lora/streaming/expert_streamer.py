@@ -175,6 +175,26 @@ class DynamicExpertStreamer:
 
         return ExpertWeightBundle(expert_idx, gate, up, down)
 
+    def sort_by_disk_order(self, layer_idx: int, expert_ids: List[int]) -> List[int]:
+        """
+        Order experts by their physical offset in the shard files.
+
+        The active set of a 512-token batch spans hundreds of experts scattered across the
+        shards. Reading them in router order makes a mechanical disk seek back and forth;
+        reading them in on-disk order turns the same bytes into a near-sequential sweep.
+        """
+        index = self.mmap_streamer.index
+
+        def key(exp_id: int):
+            name = f"model.layers.{layer_idx}.block_sparse_moe.experts.{exp_id}.w1.weight_packed"
+            resolved = index._resolve_name(name)
+            if resolved is None:
+                return (1, "", 0)
+            shard_path, start, _end, _shape, _dtype = index.tensor_locations[resolved]
+            return (0, shard_path, start)
+
+        return sorted(expert_ids, key=key)
+
     def request_prefetch_layer(self, layer_idx: int, active_experts: List[int], include_shared: bool = True) -> None:
         """No-op in zero-cache mode to prevent RAM bloat."""
         pass

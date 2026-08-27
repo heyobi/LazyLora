@@ -48,11 +48,22 @@ class LoRALayerBundle:
         alpha: int = 32,
         dropout: float = 0.0,
         device: str = "cpu",
+        is_dense: bool = False,
+        dense_intermediate_size: int = 33792,
     ):
         self.layer_idx = layer_idx
+        self.is_dense = is_dense
         # Attention LoRA adapters (hidden 7168 -> num_heads * head_dim)
         self.q_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
         self.v_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
+
+        if is_dense:
+            # The first `first_k_dense_replace` layers of Kimi K3 carry a plain MLP
+            # (mlp.gate_proj / up_proj / down_proj, 7168 -> 33792 -> 7168) and no experts.
+            self.dense_gate_lora = LazyLoRALinear(hidden_size, dense_intermediate_size, r, alpha, dropout, device)
+            self.dense_up_lora = LazyLoRALinear(hidden_size, dense_intermediate_size, r, alpha, dropout, device)
+            self.dense_down_lora = LazyLoRALinear(dense_intermediate_size, hidden_size, r, alpha, dropout, device)
+            return
 
         # Shared-expert LoRA adapters (dense path: 7168 -> 6144 -> 7168)
         self.shared_gate_lora = LazyLoRALinear(hidden_size, shared_intermediate_size, r, alpha, dropout, device)
@@ -67,6 +78,14 @@ class LoRALayerBundle:
 
     def all_modules(self) -> List[Tuple[str, Any]]:
         """(name, module) pairs for every LoRA adapter in this layer."""
+        if self.is_dense:
+            return [
+                ("q_lora", self.q_lora),
+                ("v_lora", self.v_lora),
+                ("dense_gate_lora", self.dense_gate_lora),
+                ("dense_up_lora", self.dense_up_lora),
+                ("dense_down_lora", self.dense_down_lora),
+            ]
         return [
             ("q_lora", self.q_lora),
             ("v_lora", self.v_lora),
@@ -143,6 +162,8 @@ class LazyLoRATrainer:
                 alpha=self.config.lora.lora_alpha,
                 dropout=self.config.lora.lora_dropout,
                 device=self.device,
+                is_dense=(l < self.config.model.first_k_dense_replace),
+                dense_intermediate_size=self.config.model.intermediate_size,
             )
             for l in range(self.config.model.num_hidden_layers)
         ]
@@ -171,10 +192,26 @@ class LazyLoRATrainer:
         self.dashboard = TerminalDashboard()
 
     def _embed_tokens(self, input_ids: Union["torch.Tensor", np.ndarray]) -> Union["torch.Tensor", np.ndarray]:
-        """Embed input tokens using resident or streamed embedding table."""
-        embed_weight = self.mmap_streamer.load_tensor("model.embed_tokens.weight", target_device=self.device)
+        """Embed input tokens by reading only the rows the batch actually touches.
+
+        The full table is 163840 x 7168 (2.35 GB); a 512-token batch needs a few hundred
+        rows, so it is gathered straight from mmap instead of being copied into RAM.
+        """
         vocab_sz = self.config.model.vocab_size
         d_hidden = self.config.model.hidden_size
+
+        ids_np = input_ids.detach().cpu().numpy() if (HAS_TORCH and isinstance(input_ids, torch.Tensor)) else np.asarray(input_ids)
+        unique_ids, inverse = np.unique(ids_np.reshape(-1), return_inverse=True)
+        rows = self.mmap_streamer.load_tensor_rows(
+            "model.embed_tokens.weight", unique_ids, target_device=self.device
+        )
+        if rows is not None:
+            if HAS_TORCH and isinstance(rows, torch.Tensor):
+                gathered = rows[torch.from_numpy(inverse.astype(np.int64))]
+                return gathered.view(*ids_np.shape, rows.shape[1])
+            return rows[inverse].reshape(*ids_np.shape, rows.shape[1])
+
+        embed_weight = self.mmap_streamer.load_tensor("model.embed_tokens.weight", target_device=self.device)
 
         if embed_weight is None:
             # Synthetic embedding table for testing
@@ -188,22 +225,117 @@ class LazyLoRATrainer:
         else:
             return embed_weight[input_ids]
 
-    def _project_lm_head(self, hidden_state: Union["torch.Tensor", np.ndarray]) -> Union["torch.Tensor", np.ndarray]:
-        """Project final hidden state through LM head to compute vocabulary logits."""
-        head_weight = self.mmap_streamer.load_tensor("lm_head.weight", target_device=self.device)
+    LM_HEAD_CHUNK_ROWS = 16384
+
+    def _lm_head_bands(self):
+        """Yield (row_start, row_end, weight_band) over the LM head, one band at a time.
+
+        Keeps at most LM_HEAD_CHUNK_ROWS x hidden of the 2.35 GB head resident, instead of
+        materialising the whole matrix (which the forward and the backward each did once).
+        """
         vocab_sz = self.config.model.vocab_size
         d_hidden = self.config.model.hidden_size
+        shape = self.mmap_streamer.tensor_shape("lm_head.weight")
 
-        if head_weight is None:
+        if shape is None:
+            # Synthetic head for tests / profiling: emit it as a single band.
             if HAS_TORCH:
-                head_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
+                w = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
             else:
-                head_weight = (np.random.randn(vocab_sz, d_hidden) * 0.02).astype(np.float32)
+                w = (np.random.randn(vocab_sz, d_hidden) * 0.02).astype(np.float32)
+            yield 0, vocab_sz, w
+            return
+
+        for start in range(0, shape[0], self.LM_HEAD_CHUNK_ROWS):
+            end = min(start + self.LM_HEAD_CHUNK_ROWS, shape[0])
+            band = self.mmap_streamer.load_tensor_row_slice(
+                "lm_head.weight", start, end, target_device=self.device
+            )
+            if band is None:
+                continue
+            yield start, end, band
+            del band
+
+    def _project_lm_head(self, hidden_state: Union["torch.Tensor", np.ndarray]) -> Union["torch.Tensor", np.ndarray]:
+        """Project final hidden state through the LM head, band by band."""
+        vocab_sz = self.config.model.vocab_size
 
         if HAS_TORCH and isinstance(hidden_state, torch.Tensor):
-            return F.linear(hidden_state, head_weight)
+            logits = None
+            for start, end, w in self._lm_head_bands():
+                if w.dtype != hidden_state.dtype:
+                    w = w.to(hidden_state.dtype)
+                part = F.linear(hidden_state, w)
+                if logits is None:
+                    logits = torch.zeros(
+                        (*hidden_state.shape[:-1], vocab_sz), dtype=part.dtype, device=part.device
+                    )
+                logits[..., start:end] = part
+                del part
+            return logits
         else:
-            return np.matmul(hidden_state, head_weight.T)
+            logits = np.zeros((*hidden_state.shape[:-1], vocab_sz), dtype=np.float32)
+            for start, end, w in self._lm_head_bands():
+                logits[..., start:end] = np.matmul(hidden_state, np.asarray(w, dtype=np.float32).T)
+            return logits
+
+    def _lm_head_backward(
+        self,
+        grad_logits: Union["torch.Tensor", np.ndarray],
+    ) -> Union["torch.Tensor", np.ndarray]:
+        """Propagate the loss gradient back through the LM head, band by band."""
+        if HAS_TORCH and isinstance(grad_logits, torch.Tensor):
+            grad_h = None
+            for start, end, w in self._lm_head_bands():
+                g_band = grad_logits[..., start:end].to(w.dtype)
+                part = F.linear(g_band, w.t())
+                grad_h = part if grad_h is None else grad_h + part
+                del part, g_band
+            return grad_h
+        else:
+            grad_h = None
+            for start, end, w in self._lm_head_bands():
+                part = np.matmul(grad_logits[..., start:end], np.asarray(w, dtype=np.float32))
+                grad_h = part if grad_h is None else grad_h + part
+            return grad_h
+
+    def _load_dense_mlp(self, layer_idx: int):
+        """Load the plain MLP weights of a dense (non-MoE) layer, with synthetic fallback."""
+        prefix = f"model.layers.{layer_idx}.mlp."
+        gate = self.mmap_streamer.load_tensor(f"{prefix}gate_proj.weight", target_device=self.device)
+        up = self.mmap_streamer.load_tensor(f"{prefix}up_proj.weight", target_device=self.device)
+        down = self.mmap_streamer.load_tensor(f"{prefix}down_proj.weight", target_device=self.device)
+
+        if gate is None or up is None or down is None:
+            d_in = self.config.model.hidden_size
+            d_mid = self.config.model.intermediate_size
+            if HAS_TORCH:
+                gate = torch.randn(d_mid, d_in, dtype=torch.bfloat16, device=self.device) * 0.01
+                up = torch.randn(d_mid, d_in, dtype=torch.bfloat16, device=self.device) * 0.01
+                down = torch.randn(d_in, d_mid, dtype=torch.bfloat16, device=self.device) * 0.01
+            else:
+                gate = (np.random.randn(d_mid, d_in) * 0.01).astype(np.float32)
+                up = (np.random.randn(d_mid, d_in) * 0.01).astype(np.float32)
+                down = (np.random.randn(d_in, d_mid) * 0.01).astype(np.float32)
+        return gate, up, down
+
+    def _dense_mlp_forward(self, layer_idx, bundle, h_mid, h_norm):
+        """Dense MLP sublayer: h -> (gate, up) -> SiTU-GLU -> down -> residual add."""
+        gate_w, up_w, down_w = self._load_dense_mlp(layer_idx)
+        if HAS_TORCH and isinstance(h_norm, torch.Tensor):
+            if h_norm.dtype != gate_w.dtype:
+                h_norm = h_norm.to(gate_w.dtype)
+            gate = F.linear(h_norm, gate_w) + bundle.dense_gate_lora.forward_lora_only(h_norm)
+            up = F.linear(h_norm, up_w) + bundle.dense_up_lora.forward_lora_only(h_norm)
+            situ = situ_glu_forward(gate, up)
+            mlp_out = F.linear(situ, down_w) + bundle.dense_down_lora.forward_lora_only(situ)
+        else:
+            gate = np.matmul(h_norm, gate_w.T) + bundle.dense_gate_lora.forward_lora_only(h_norm)
+            up = np.matmul(h_norm, up_w.T) + bundle.dense_up_lora.forward_lora_only(h_norm)
+            situ = situ_glu_forward(gate, up)
+            mlp_out = np.matmul(situ, down_w.T) + bundle.dense_down_lora.forward_lora_only(situ)
+        del gate_w, up_w, down_w, gate, up, situ
+        return h_mid + mlp_out
 
     def forward_layer(
         self,
@@ -244,10 +376,18 @@ class LazyLoRATrainer:
 
         self.trunk_streamer.release_layer_trunk()
 
+        # 2b. Dense layers: Kimi K3's first `first_k_dense_replace` layers have a plain MLP
+        # and no experts at all, so routing them through the MoE path would fabricate
+        # hundreds of synthetic experts for tensors that do not exist on disk.
+        if bundle.is_dense:
+            h_mlp_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
+            h_out = self._dense_mlp_forward(layer_idx, bundle, h_mid, h_mlp_norm)
+            return h_out, []
+
         # 3. MoE Routing
         h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
         topk_indices, topk_weights = self.router.forward(h_moe_norm)
-        active_experts = self.router.get_active_expert_set(topk_indices)
+        active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
 
         # Prefetch active experts for next layer if applicable
         if layer_idx + 1 < self.config.model.num_hidden_layers:
@@ -360,6 +500,71 @@ class LazyLoRATrainer:
 
         return h_out, active_experts
 
+    def _dense_layer_backward(self, layer_idx, bundle, trunk, h_in, grad_h_out, is_torch):
+        """Backward for a dense (non-MoE) layer: MLP LoRA grads, then attention q/v LoRA grads."""
+        # Recompute attention forward to reach h_mid
+        h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
+        if is_torch:
+            v = F.linear(h_norm1, trunk.v_proj) + bundle.v_lora.forward_lora_only(h_norm1)
+            attn_out = F.linear(v, trunk.o_proj)
+        else:
+            v = np.matmul(h_norm1, trunk.v_proj.T) + bundle.v_lora.forward_lora_only(h_norm1)
+            attn_out = np.matmul(v, trunk.o_proj.T)
+        h_mid = h_in + attn_out
+
+        # Recompute the MLP sublayer states
+        h_norm2 = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
+        gate_w, up_w, down_w = self._load_dense_mlp(layer_idx)
+        if is_torch and h_norm2.dtype != gate_w.dtype:
+            h_norm2 = h_norm2.to(gate_w.dtype)
+
+        if is_torch:
+            gate = F.linear(h_norm2, gate_w) + bundle.dense_gate_lora.forward_lora_only(h_norm2)
+            up = F.linear(h_norm2, up_w) + bundle.dense_up_lora.forward_lora_only(h_norm2)
+        else:
+            gate = np.matmul(h_norm2, gate_w.T) + bundle.dense_gate_lora.forward_lora_only(h_norm2)
+            up = np.matmul(h_norm2, up_w.T) + bundle.dense_up_lora.forward_lora_only(h_norm2)
+        situ = situ_glu_forward(gate, up)
+
+        grad_h_mid = grad_h_out.clone() if is_torch else grad_h_out.copy().reshape(h_mid.shape)
+
+        gA_d, gB_d, d_situ = bundle.dense_down_lora.compute_lora_gradients(grad_h_out, situ, down_w)
+        bundle.dense_down_lora.accumulate_grad(gA_d, gB_d)
+
+        if d_situ is not None:
+            d_gate, d_up = situ_glu_backward(d_situ, gate, up)
+            gA_g, gB_g, d_in_g = bundle.dense_gate_lora.compute_lora_gradients(d_gate, h_norm2, gate_w)
+            bundle.dense_gate_lora.accumulate_grad(gA_g, gB_g)
+
+            gA_u, gB_u, d_in_u = bundle.dense_up_lora.compute_lora_gradients(d_up, h_norm2, up_w)
+            bundle.dense_up_lora.accumulate_grad(gA_u, gB_u)
+
+            if d_in_g is not None and d_in_u is not None:
+                contrib = d_in_g + d_in_u
+                if is_torch:
+                    grad_h_mid = grad_h_mid + contrib.view_as(grad_h_mid)
+                else:
+                    grad_h_mid = grad_h_mid + contrib.reshape(grad_h_mid.shape)
+        del gate_w, up_w, down_w, gate, up, situ
+
+        # Attention sublayer backward (q/v LoRA)
+        if is_torch:
+            d_v = F.linear(grad_h_mid, trunk.o_proj.t())
+        else:
+            d_v = np.matmul(grad_h_mid, trunk.o_proj)
+
+        gA_v, gB_v, d_in_v = bundle.v_lora.compute_lora_gradients(d_v, h_norm1, trunk.v_proj)
+        bundle.v_lora.accumulate_grad(gA_v, gB_v)
+        gA_q, gB_q, d_in_q = bundle.q_lora.compute_lora_gradients(d_v, h_norm1, trunk.q_proj)
+        bundle.q_lora.accumulate_grad(gA_q, gB_q)
+
+        grad_h_in = grad_h_mid.clone() if is_torch else grad_h_mid.copy()
+        for d_in in (d_in_v, d_in_q):
+            if d_in is None:
+                continue
+            grad_h_in = grad_h_in + (d_in.view_as(grad_h_in) if is_torch else d_in.reshape(grad_h_in.shape))
+        return grad_h_in
+
     def backward_layer(
         self,
         layer_idx: int,
@@ -382,6 +587,11 @@ class LazyLoRATrainer:
         trunk = self.trunk_streamer.load_layer_trunk(layer_idx)
         bundle = self.lora_layers[layer_idx]
 
+        if bundle.is_dense:
+            grad_h_in = self._dense_layer_backward(layer_idx, bundle, trunk, h_in, grad_h_out, is_torch)
+            self.trunk_streamer.release_layer_trunk()
+            return grad_h_in
+
         if is_torch:
             # Recompute Attention forward
             h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
@@ -392,7 +602,7 @@ class LazyLoRATrainer:
             # Recompute MoE forward states
             h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
             topk_indices, topk_weights = self.router.forward(h_moe_norm)
-            active_experts = self.router.get_active_expert_set(topk_indices)
+            active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
 
             # MoE Backward (Kimi K3 Latent MoE), mirroring the forward pass exactly:
             #   shared expert : 7168 -> 6144 -> 7168   (LoRA on gate/up/down)
@@ -500,7 +710,7 @@ class LazyLoRATrainer:
 
             h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
             topk_indices, topk_weights = self.router.forward(h_moe_norm)
-            active_experts = self.router.get_active_expert_set(topk_indices)
+            active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
 
             # MoE Backward: same structure as the torch path (shared dense expert +
             # routed experts in the 3584-dim latent space), full LoRA coverage.
@@ -621,20 +831,8 @@ class LazyLoRATrainer:
             )
 
             # 4. Out-of-Core Real Reverse Backward Pass (Layer L-1 -> Layer 0)
-            # Backprop through LM head projection
-            head_weight = self.mmap_streamer.load_tensor("lm_head.weight", target_device=self.device)
-            if head_weight is None:
-                vocab_sz = self.config.model.vocab_size
-                d_hidden = self.config.model.hidden_size
-                if HAS_TORCH and isinstance(logits, torch.Tensor):
-                    head_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
-                else:
-                    head_weight = (np.random.randn(vocab_sz, d_hidden) * 0.02).astype(np.float32)
-
-            if HAS_TORCH and isinstance(grad_logits, torch.Tensor):
-                grad_h = F.linear(grad_logits.to(head_weight.dtype), head_weight.t())
-            else:
-                grad_h = np.matmul(grad_logits, head_weight)
+            # Backprop through LM head projection (streamed band by band)
+            grad_h = self._lm_head_backward(grad_logits)
 
             # Sequential reverse backward pass through all 93 layers reading activations from D: SSD
             for l in range(num_layers - 1, -1, -1):

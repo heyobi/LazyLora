@@ -99,7 +99,9 @@ class TestDatasetAndConvergence(unittest.TestCase):
             losses.append(loss)
 
         # Verify optimizer step updated weights (parameters are valid without NaN)
-        lora_A = trainer.lora_layers[0].down_lora.lora_A
+        # Layer 0 is a dense (non-MoE) layer in Kimi K3, so inspect the first MoE layer.
+        moe_bundle = next(b for b in trainer.lora_layers if not b.is_dense)
+        lora_A = moe_bundle.down_lora.lora_A
         if HAS_TORCH and isinstance(lora_A, torch.Tensor):
             self.assertFalse(torch.isnan(lora_A).any(), "LoRA weights contain NaN")
         else:

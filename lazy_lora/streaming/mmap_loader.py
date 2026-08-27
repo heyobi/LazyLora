@@ -196,6 +196,95 @@ class MmapTensorStreamer:
         else:
             return arr
 
+    def load_tensor_rows(
+        self,
+        tensor_name: str,
+        row_indices: Union[List[int], np.ndarray],
+        target_device: str = "cpu",
+        as_torch: bool = True,
+    ) -> Optional[Union["torch.Tensor", np.ndarray]]:
+        """
+        Extract only selected rows of a 2-D tensor.
+
+        The embedding table and LM head are 163840 x 7168 (2.35 GB each); a training step
+        touches at most a few hundred of those rows, so copying the whole matrix into RAM
+        is pure waste and the main source of memory pressure in the engine.
+        """
+        resolved_name = self.index._resolve_name(tensor_name)
+        if resolved_name is None:
+            return None
+
+        shard_path, start, end, shape, dtype_str = self.index.tensor_locations[resolved_name]
+        if len(shape) != 2:
+            return None
+
+        np_dtype = np.dtype(DTYPE_MAP_NUMPY.get(dtype_str, np.float32))
+        row_bytes = shape[1] * np_dtype.itemsize
+        mm = self._get_mmap(shard_path)
+
+        rows = np.asarray(row_indices, dtype=np.int64).reshape(-1)
+        out = np.empty((rows.shape[0], shape[1]), dtype=np_dtype)
+        for i, r in enumerate(rows):
+            if r < 0 or r >= shape[0]:
+                out[i] = 0
+                continue
+            off = start + int(r) * row_bytes
+            out[i] = np.frombuffer(mm[off:off + row_bytes], dtype=np_dtype)
+
+        if as_torch and HAS_TORCH:
+            t = torch.from_numpy(out)
+            if dtype_str == "BF16":
+                t = t.view(torch.bfloat16)
+            if target_device != "cpu" and torch.cuda.is_available():
+                t = t.to(target_device, non_blocking=True)
+            return t
+        return out
+
+    def tensor_shape(self, tensor_name: str) -> Optional[List[int]]:
+        """Shape of a tensor without reading any of its data."""
+        resolved_name = self.index._resolve_name(tensor_name)
+        if resolved_name is None:
+            return None
+        return self.index.tensor_locations[resolved_name][3]
+
+    def load_tensor_row_slice(
+        self,
+        tensor_name: str,
+        row_start: int,
+        row_end: int,
+        target_device: str = "cpu",
+        as_torch: bool = True,
+    ) -> Optional[Union["torch.Tensor", np.ndarray]]:
+        """Extract a contiguous row band [row_start, row_end) of a 2-D tensor."""
+        resolved_name = self.index._resolve_name(tensor_name)
+        if resolved_name is None:
+            return None
+
+        shard_path, start, end, shape, dtype_str = self.index.tensor_locations[resolved_name]
+        if len(shape) != 2:
+            return None
+
+        row_start = max(0, row_start)
+        row_end = min(shape[0], row_end)
+        if row_end <= row_start:
+            return None
+
+        np_dtype = np.dtype(DTYPE_MAP_NUMPY.get(dtype_str, np.float32))
+        row_bytes = shape[1] * np_dtype.itemsize
+        mm = self._get_mmap(shard_path)
+        off = start + row_start * row_bytes
+        raw = mm[off:off + (row_end - row_start) * row_bytes]
+        arr = np.frombuffer(raw, dtype=np_dtype).reshape(row_end - row_start, shape[1])
+
+        if as_torch and HAS_TORCH:
+            t = torch.from_numpy(arr.copy())
+            if dtype_str == "BF16":
+                t = t.view(torch.bfloat16)
+            if target_device != "cpu" and torch.cuda.is_available():
+                t = t.to(target_device, non_blocking=True)
+            return t
+        return arr
+
     def close(self) -> None:
         """Close all open mmap descriptors."""
         for shard_path, (mm, fd) in self._mmap_handles.items():
