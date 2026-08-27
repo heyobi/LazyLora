@@ -1,7 +1,7 @@
 """
 Dynamic Expert-Wise Streaming Engine for Out-of-Core MoE Training.
 Loads ONLY active top-k experts and shared experts into RAM on-demand.
-Supports INT4 quantized weights (weight_packed + weight_scale) from Kimi K3.
+Supports MXFP4 quantized weights (weight_packed + weight_scale) from Kimi K3.
 """
 
 import os
@@ -38,51 +38,61 @@ class ExpertWeightBundle:
         self.down_proj = down_proj
 
 
-def _dequantize_int4(weight_packed, weight_scale):
+# FP4 (E2M1) magnitudes indexed by the low 3 bits of each nibble; bit 3 is the sign.
+FP4_E2M1_MAGNITUDES = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+
+
+def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
     """
-    Dequantize INT4 packed weights using scale factors.
-    weight_packed: uint8 array with 2 INT4 values per byte
-    weight_scale: bfloat16/float16 scale factors per group
-    Returns: dequantized bfloat16 tensor
+    Dequantize Kimi K3's routed experts, which are stored as MXFP4.
+
+    config.json declares `"format": "mxfp4-pack-quantized"` with `num_bits: 4`,
+    `group_size: 32`, `type: "float"` and `scale_dtype: torch.uint8`:
+
+    * `weight_packed` holds two FP4 (E2M1) codes per byte, low nibble first. Each code
+      is a sign bit plus a 3-bit index into FP4_E2M1_MAGNITUDES.
+    * `weight_scale` holds one E8M0 exponent per group of 32 input channels, so the
+      group multiplier is 2^(scale - 127), not the raw byte value.
+
+    Sanity check on layer 1 expert 0: the result lands at |w| ~ 0.015, matching the
+    unquantised shared expert of the same layer (absmean 0.0149).
     """
     if HAS_TORCH and isinstance(weight_packed, torch.Tensor):
-        # Unpack: each byte holds 2 int4 values
-        low = (weight_packed & 0x0F).to(torch.int8) - 8   # signed range [-8, 7]
-        high = ((weight_packed >> 4) & 0x0F).to(torch.int8) - 8
-        # Interleave to reconstruct original order
-        unpacked = torch.stack([low, high], dim=-1).reshape(
-            weight_packed.shape[0], weight_packed.shape[1] * 2
-        ).to(torch.bfloat16)
-        # Apply scale: scale is per-group, broadcast along columns
+        codes = torch.stack(
+            [weight_packed & 0x0F, (weight_packed >> 4) & 0x0F], dim=-1
+        ).reshape(weight_packed.shape[0], weight_packed.shape[1] * 2).long()
+
+        lut = torch.tensor(FP4_E2M1_MAGNITUDES, dtype=torch.float32, device=codes.device)
+        values = lut[codes & 0x7]
+        values = torch.where(codes & 0x8 != 0, -values, values)
+
         if weight_scale.dim() == 2:
-            # scale shape: [out_features, num_groups] or [out_features, in_features/group_size]
-            group_size = unpacked.shape[1] // weight_scale.shape[1]
-            scale_expanded = weight_scale.repeat_interleave(group_size, dim=1)
-            if scale_expanded.shape[1] > unpacked.shape[1]:
-                scale_expanded = scale_expanded[:, :unpacked.shape[1]]
-            elif scale_expanded.shape[1] < unpacked.shape[1]:
-                # Pad scale to match
-                pad = unpacked.shape[1] - scale_expanded.shape[1]
-                scale_expanded = F.pad(scale_expanded, (0, pad), value=1.0)
-            return unpacked * scale_expanded.to(torch.bfloat16)
+            groups = max(values.shape[1] // weight_scale.shape[1], 1)
+            exponent = weight_scale.to(torch.float32).repeat_interleave(groups, dim=1)
+            exponent = exponent[:, :values.shape[1]]
         else:
-            return unpacked * weight_scale.to(torch.bfloat16)
-    else:
-        # NumPy fallback
-        if isinstance(weight_packed, np.ndarray):
-            low = (weight_packed & 0x0F).astype(np.int8) - 8
-            high = ((weight_packed >> 4) & 0x0F).astype(np.int8) - 8
-            unpacked = np.stack([low, high], axis=-1).reshape(
-                weight_packed.shape[0], weight_packed.shape[1] * 2
-            ).astype(np.float32)
-            if weight_scale.ndim == 2:
-                group_size = unpacked.shape[1] // weight_scale.shape[1]
-                scale_expanded = np.repeat(weight_scale.astype(np.float32), group_size, axis=1)
-                if scale_expanded.shape[1] > unpacked.shape[1]:
-                    scale_expanded = scale_expanded[:, :unpacked.shape[1]]
-                return unpacked * scale_expanded
-            return unpacked * weight_scale.astype(np.float32)
-        return weight_packed
+            exponent = weight_scale.to(torch.float32).view(-1, 1)
+        values = values * torch.exp2(exponent - 127.0)
+        return values.to(torch.bfloat16)
+
+    if isinstance(weight_packed, np.ndarray):
+        codes = np.stack(
+            [weight_packed & 0x0F, (weight_packed >> 4) & 0x0F], axis=-1
+        ).reshape(weight_packed.shape[0], weight_packed.shape[1] * 2).astype(np.int32)
+
+        lut = np.asarray(FP4_E2M1_MAGNITUDES, dtype=np.float32)
+        values = lut[codes & 0x7]
+        values = np.where(codes & 0x8 != 0, -values, values)
+
+        if weight_scale.ndim == 2:
+            groups = max(values.shape[1] // weight_scale.shape[1], 1)
+            exponent = np.repeat(weight_scale.astype(np.float32), groups, axis=1)
+            exponent = exponent[:, :values.shape[1]]
+        else:
+            exponent = weight_scale.astype(np.float32).reshape(-1, 1)
+        return values * np.exp2(exponent - 127.0)
+
+    return weight_packed
 
 
 class DynamicExpertStreamer:
@@ -126,10 +136,10 @@ class DynamicExpertStreamer:
             up = self.mmap_streamer.load_tensor(f"{prefix}up_proj.weight", target_device=self.device)
             down = self.mmap_streamer.load_tensor(f"{prefix}down_proj.weight", target_device=self.device)
         else:
-            # Routed experts: INT4 quantized (weight_packed + weight_scale)
+            # Routed experts: MXFP4 quantized (weight_packed + weight_scale)
             prefix = f"model.layers.{layer_idx}.block_sparse_moe.experts.{expert_idx}."
 
-            # Try INT4 packed format first
+            # Try the packed format first
             w1_packed = self.mmap_streamer.load_tensor(f"{prefix}w1.weight_packed", target_device=self.device)
             w1_scale = self.mmap_streamer.load_tensor(f"{prefix}w1.weight_scale", target_device=self.device)
             w2_packed = self.mmap_streamer.load_tensor(f"{prefix}w2.weight_packed", target_device=self.device)
@@ -138,9 +148,9 @@ class DynamicExpertStreamer:
             w3_scale = self.mmap_streamer.load_tensor(f"{prefix}w3.weight_scale", target_device=self.device)
 
             if w1_packed is not None and w1_scale is not None:
-                gate = _dequantize_int4(w1_packed, w1_scale)
-                down = _dequantize_int4(w2_packed, w2_scale)
-                up = _dequantize_int4(w3_packed, w3_scale)
+                gate = _dequantize_mxfp4(w1_packed, w1_scale)
+                down = _dequantize_mxfp4(w2_packed, w2_scale)
+                up = _dequantize_mxfp4(w3_packed, w3_scale)
             else:
                 # Fallback: try full-precision names
                 gate = self.mmap_streamer.load_tensor(f"{prefix}w1.weight", target_device=self.device)
