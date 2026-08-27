@@ -33,6 +33,32 @@ class RMSNormFunction:
             return x_normed * weight
 
 
+KDA_TENSORS = [
+    "q_proj.weight", "k_proj.weight", "v_proj.weight",
+    "q_conv1d.weight", "k_conv1d.weight", "v_conv1d.weight",
+    "f_a_proj.weight", "f_b_proj.weight", "dt_bias", "A_log",
+    "b_proj.weight", "g_proj.weight", "o_norm.weight", "o_proj.weight",
+]
+
+MLA_TENSORS = [
+    "q_a_proj.weight", "q_a_layernorm.weight", "q_b_proj.weight",
+    "kv_a_proj_with_mqa.weight", "kv_a_layernorm.weight", "kv_b_proj.weight",
+    "g_proj.weight", "o_proj.weight",
+]
+
+
+class AttentionWeights:
+    """Namespace of one layer's attention tensors, named as the math expects them."""
+
+    def __init__(self, layer_idx: int, is_kda: bool):
+        self.layer_idx = layer_idx
+        self.is_kda = is_kda
+
+    def __repr__(self) -> str:
+        kind = "KDA" if self.is_kda else "MLA"
+        return f"<AttentionWeights layer={self.layer_idx} {kind}>"
+
+
 class TrunkWeightBundle:
     """Holds dense trunk weights for a single layer."""
     def __init__(
@@ -104,6 +130,87 @@ class LayerTrunkStreamer:
             o_proj=o_proj,
         )
         return self._current_bundle
+
+    def load_attention_weights(
+        self,
+        layer_idx: int,
+        is_kda: bool,
+        num_heads: int = 96,
+        head_dim: int = 128,
+        conv_kernel: int = 4,
+        q_lora_rank: int = 1536,
+        kv_lora_rank: int = 512,
+        qk_nope_head_dim: int = 128,
+        qk_rope_head_dim: int = 64,
+        v_head_dim: int = 128,
+    ) -> "AttentionWeights":
+        """
+        Stream the attention tensors of one layer, picking the set that matches its type.
+
+        Missing tensors fall back to synthetic ones with the correct shapes so that the
+        mock test configurations keep working without the 1.45 TB checkpoint.
+        """
+        w = AttentionWeights(layer_idx, is_kda)
+        prefix = f"model.layers.{layer_idx}.self_attn."
+        names = KDA_TENSORS if is_kda else MLA_TENSORS
+
+        missing = []
+        for name in names:
+            attr = name.replace(".weight", "")
+            tensor = self.mmap_streamer.load_tensor(prefix + name, target_device=self.device)
+            if tensor is None:
+                missing.append(attr)
+            setattr(w, attr, tensor)
+
+        if missing:
+            self._fill_synthetic_attention(
+                w, missing, num_heads, head_dim, conv_kernel, q_lora_rank, kv_lora_rank,
+                qk_nope_head_dim, qk_rope_head_dim, v_head_dim,
+            )
+        return w
+
+    def _fill_synthetic_attention(
+        self, w, missing, num_heads, head_dim, conv_kernel, q_lora_rank, kv_lora_rank,
+        qk_nope_head_dim, qk_rope_head_dim, v_head_dim,
+    ) -> None:
+        """Synthetic attention tensors with the exact shapes of the real checkpoint."""
+        d_hidden = self.hidden_size
+        proj = num_heads * head_dim
+        q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        shapes = {
+            # KDA
+            "q_proj": (proj, d_hidden), "k_proj": (proj, d_hidden), "v_proj": (proj, d_hidden),
+            "q_conv1d": (proj, 1, conv_kernel), "k_conv1d": (proj, 1, conv_kernel),
+            "v_conv1d": (proj, 1, conv_kernel),
+            "f_a_proj": (head_dim, d_hidden), "f_b_proj": (proj, head_dim),
+            "dt_bias": (proj,), "A_log": (head_dim,), "b_proj": (num_heads, d_hidden),
+            "o_norm": (head_dim,),
+            # MLA
+            "q_a_proj": (q_lora_rank, d_hidden), "q_a_layernorm": (q_lora_rank,),
+            "q_b_proj": (num_heads * q_head_dim, q_lora_rank),
+            "kv_a_proj_with_mqa": (kv_lora_rank + qk_rope_head_dim, d_hidden),
+            "kv_a_layernorm": (kv_lora_rank,),
+            "kv_b_proj": (num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
+            # shared
+            "g_proj": (proj, d_hidden), "o_proj": (d_hidden, proj),
+        }
+
+        for attr in missing:
+            shape = shapes.get(attr)
+            if shape is None:
+                continue
+            if attr in ("dt_bias", "A_log"):
+                value = (torch.zeros(shape, dtype=torch.float32, device=self.device)
+                         if HAS_TORCH else np.zeros(shape, dtype=np.float32))
+            elif attr.endswith("norm") or attr.endswith("layernorm"):
+                value = (torch.ones(shape, dtype=torch.bfloat16, device=self.device)
+                         if HAS_TORCH else np.ones(shape, dtype=np.float32))
+            elif HAS_TORCH:
+                value = torch.randn(shape, dtype=torch.bfloat16, device=self.device) * 0.02
+            else:
+                value = (np.random.randn(*shape) * 0.02).astype(np.float32)
+            setattr(w, attr, value)
 
     def release_layer_trunk(self) -> None:
         """Evict current layer trunk weights from RAM/VRAM."""

@@ -38,10 +38,25 @@ class KimiK3ArchitectureConfig:
     rms_norm_eps: float = 1e-5
     first_k_dense_replace: int = 1
     routed_scaling_factor: float = 1.0
+    # Kimi Linear interleaves two attention types. `full_attn_layers` is stored exactly as
+    # config.json lists it (1-based); everything else is a KDA linear-attention layer.
+    full_attn_layers: List[int] = field(
+        default_factory=lambda: [4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48,
+                                 52, 56, 60, 64, 68, 72, 76, 80, 84, 88, 92, 93]
+    )
+    # KDA uses the same head geometry as the rest of the model
+    # (linear_attn_config: num_heads 96, head_dim 128).
+    short_conv_kernel_size: int = 4
+    gate_lower_bound: float = -5.0
+    mla_use_output_gate: bool = True
     situ_beta: float = 4.0
     situ_linear_beta: float = 25.0
     activation_func: str = "situ"
     dtype: str = "bfloat16"
+
+    def is_kda_layer(self, layer_idx: int) -> bool:
+        """True when layer_idx uses KDA linear attention rather than full MLA."""
+        return (layer_idx + 1) not in set(self.full_attn_layers)
 
 
 @dataclass

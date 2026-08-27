@@ -24,6 +24,7 @@ from lazy_lora.core.config import LazyLoraConfig, get_default_config
 from lazy_lora.core.lora_layer import LazyLoRALinear
 from lazy_lora.core.moe_router import KimiK3MoERouter
 from lazy_lora.core.situ_activation import situ_glu_forward, situ_glu_backward
+from lazy_lora.core.attention import kda_attention, mla_attention
 from lazy_lora.streaming.mmap_loader import MmapTensorStreamer
 from lazy_lora.streaming.trunk_streamer import LayerTrunkStreamer, RMSNormFunction
 from lazy_lora.streaming.expert_streamer import DynamicExpertStreamer
@@ -50,12 +51,26 @@ class LoRALayerBundle:
         device: str = "cpu",
         is_dense: bool = False,
         dense_intermediate_size: int = 33792,
+        is_kda: bool = True,
+        q_lora_rank: int = 1536,
+        kv_lora_rank: int = 512,
+        q_head_total: int = 18432,
+        kv_head_total: int = 24576,
     ):
         self.layer_idx = layer_idx
         self.is_dense = is_dense
-        # Attention LoRA adapters (hidden 7168 -> num_heads * head_dim)
-        self.q_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
-        self.v_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
+        self.is_kda = is_kda
+
+        # Attention LoRA adapters sit on the projections that actually produce q and v,
+        # which differ between the two attention types Kimi Linear interleaves.
+        if is_kda:
+            # KDA: q_proj / v_proj map hidden -> num_heads * head_dim
+            self.q_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
+            self.v_lora = LazyLoRALinear(hidden_size, attn_out_size, r, alpha, dropout, device)
+        else:
+            # MLA: the latent up-projections q_b_proj and kv_b_proj
+            self.q_lora = LazyLoRALinear(q_lora_rank, q_head_total, r, alpha, dropout, device)
+            self.v_lora = LazyLoRALinear(kv_lora_rank, kv_head_total, r, alpha, dropout, device)
 
         if is_dense:
             # The first `first_k_dense_replace` layers of Kimi K3 carry a plain MLP
@@ -164,6 +179,13 @@ class LazyLoRATrainer:
                 device=self.device,
                 is_dense=(l < self.config.model.first_k_dense_replace),
                 dense_intermediate_size=self.config.model.intermediate_size,
+                is_kda=self.config.model.is_kda_layer(l),
+                q_lora_rank=self.config.model.q_lora_rank,
+                kv_lora_rank=self.config.model.kv_lora_rank,
+                q_head_total=self.config.model.num_attention_heads
+                * (self.config.model.qk_nope_head_dim + self.config.model.qk_rope_head_dim),
+                kv_head_total=self.config.model.num_attention_heads
+                * (self.config.model.qk_nope_head_dim + self.config.model.v_head_dim),
             )
             for l in range(self.config.model.num_hidden_layers)
         ]
@@ -299,6 +321,114 @@ class LazyLoRATrainer:
                 grad_h = part if grad_h is None else grad_h + part
             return grad_h
 
+    def _attention_forward(self, layer_idx: int, bundle, h_norm):
+        """
+        Run the layer's real attention sublayer.
+
+        The attention weights are streamed here and dropped as soon as the sublayer is
+        done, so only one layer's worth is resident at a time.
+        """
+        m = self.config.model
+        is_kda = m.is_kda_layer(layer_idx)
+        if not HAS_TORCH:
+            raise RuntimeError(
+                "The Kimi Linear attention sublayers (KDA / MLA) need PyTorch. "
+                "Run the engine with the workspace venv interpreter, which has torch installed."
+            )
+        as_numpy = not isinstance(h_norm, torch.Tensor)
+        if as_numpy:
+            h_norm = torch.from_numpy(np.asarray(h_norm, dtype=np.float32))
+        w = self.trunk_streamer.load_attention_weights(
+            layer_idx,
+            is_kda=is_kda,
+            num_heads=m.num_attention_heads,
+            head_dim=m.head_dim,
+            conv_kernel=m.short_conv_kernel_size,
+            q_lora_rank=m.q_lora_rank,
+            kv_lora_rank=m.kv_lora_rank,
+            qk_nope_head_dim=m.qk_nope_head_dim,
+            qk_rope_head_dim=m.qk_rope_head_dim,
+            v_head_dim=m.v_head_dim,
+        )
+
+        if is_kda:
+            out = kda_attention(
+                h_norm, w,
+                num_heads=m.num_attention_heads,
+                head_dim=m.head_dim,
+                gate_lower_bound=m.gate_lower_bound,
+                eps=m.rms_norm_eps,
+                q_lora=bundle.q_lora,
+                v_lora=bundle.v_lora,
+            )
+        else:
+            out = mla_attention(
+                h_norm, w,
+                num_heads=m.num_attention_heads,
+                qk_nope_head_dim=m.qk_nope_head_dim,
+                qk_rope_head_dim=m.qk_rope_head_dim,
+                v_head_dim=m.v_head_dim,
+                kv_lora_rank=m.kv_lora_rank,
+                eps=m.rms_norm_eps,
+                q_lora=bundle.q_lora,
+                v_lora=bundle.v_lora,
+            )
+        del w
+        if as_numpy:
+            return out.detach().to(torch.float32).numpy()
+        return out
+
+    def _attention_backward(self, layer_idx: int, bundle, h_norm, grad_out):
+        """
+        Gradients through the real attention sublayer.
+
+        The KDA recurrence is not something to differentiate by hand, so the sublayer is
+        replayed under autograd for this one layer and the LoRA gradients are read off it.
+        Only the two attention adapters and the input activation carry gradient; the base
+        weights are frozen, exactly as LoRA requires.
+        """
+        if not HAS_TORCH:
+            return None
+
+        as_numpy = not isinstance(grad_out, torch.Tensor)
+        g_out = torch.from_numpy(np.asarray(grad_out, dtype=np.float32)) if as_numpy else grad_out
+        x_in = h_norm
+        if not isinstance(x_in, torch.Tensor):
+            x_in = torch.from_numpy(np.asarray(x_in, dtype=np.float32))
+
+        params = []
+        owners = []
+        for mod in (bundle.q_lora, bundle.v_lora):
+            if mod.lora_A is not None and mod.lora_B is not None:
+                params.extend([mod.lora_A, mod.lora_B])
+                owners.append(mod)
+
+        with torch.enable_grad():
+            x = x_in.detach().clone().requires_grad_(True)
+            out = self._attention_forward(layer_idx, bundle, x)
+            if not isinstance(out, torch.Tensor):
+                return None
+            grads = torch.autograd.grad(
+                outputs=out,
+                inputs=[x] + params,
+                grad_outputs=g_out.to(out.dtype),
+                allow_unused=True,
+                retain_graph=False,
+            )
+
+        grad_x = grads[0]
+        rest = grads[1:]
+        for i, mod in enumerate(owners):
+            gA, gB = rest[2 * i], rest[2 * i + 1]
+            if gA is not None and gB is not None:
+                mod.accumulate_grad(gA, gB)
+
+        if grad_x is None:
+            return None
+        if as_numpy:
+            return grad_x.detach().to(torch.float32).numpy()
+        return grad_x.to(g_out.dtype)
+
     def _load_dense_mlp(self, layer_idx: int):
         """Load the plain MLP weights of a dense (non-MoE) layer, with synthetic fallback."""
         prefix = f"model.layers.{layer_idx}.mlp."
@@ -358,21 +488,11 @@ class LazyLoRATrainer:
         bundle = self.lora_layers[layer_idx]
 
         h_norm = RMSNormFunction.forward(h_in, trunk.input_layernorm)
-        
-        # Attention projection with LoRA
-        if HAS_TORCH and isinstance(h_in, torch.Tensor):
-            q = F.linear(h_norm, trunk.q_proj) + bundle.q_lora.forward_lora_only(h_norm)
-            k = F.linear(h_norm, trunk.k_proj)
-            v = F.linear(h_norm, trunk.v_proj) + bundle.v_lora.forward_lora_only(h_norm)
-            # Lightweight self-attention / delta attention approximation
-            attn_out = F.linear(v, trunk.o_proj)
-            h_mid = h_in + attn_out
-        else:
-            q = np.matmul(h_norm, trunk.q_proj.T) + bundle.q_lora.forward_lora_only(h_norm)
-            k = np.matmul(h_norm, trunk.k_proj.T)
-            v = np.matmul(h_norm, trunk.v_proj.T) + bundle.v_lora.forward_lora_only(h_norm)
-            attn_out = np.matmul(v, trunk.o_proj.T)
-            h_mid = h_in + attn_out
+
+        # Real Kimi Linear attention: KDA on most layers, MLA on the full-attention ones.
+        attn_out = self._attention_forward(layer_idx, bundle, h_norm)
+        h_mid = h_in + attn_out
+        del attn_out
 
         self.trunk_streamer.release_layer_trunk()
 
@@ -504,12 +624,7 @@ class LazyLoRATrainer:
         """Backward for a dense (non-MoE) layer: MLP LoRA grads, then attention q/v LoRA grads."""
         # Recompute attention forward to reach h_mid
         h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
-        if is_torch:
-            v = F.linear(h_norm1, trunk.v_proj) + bundle.v_lora.forward_lora_only(h_norm1)
-            attn_out = F.linear(v, trunk.o_proj)
-        else:
-            v = np.matmul(h_norm1, trunk.v_proj.T) + bundle.v_lora.forward_lora_only(h_norm1)
-            attn_out = np.matmul(v, trunk.o_proj.T)
+        attn_out = self._attention_forward(layer_idx, bundle, h_norm1)
         h_mid = h_in + attn_out
 
         # Recompute the MLP sublayer states
@@ -547,22 +662,13 @@ class LazyLoRATrainer:
                     grad_h_mid = grad_h_mid + contrib.reshape(grad_h_mid.shape)
         del gate_w, up_w, down_w, gate, up, situ
 
-        # Attention sublayer backward (q/v LoRA)
-        if is_torch:
-            d_v = F.linear(grad_h_mid, trunk.o_proj.t())
-        else:
-            d_v = np.matmul(grad_h_mid, trunk.o_proj)
-
-        gA_v, gB_v, d_in_v = bundle.v_lora.compute_lora_gradients(d_v, h_norm1, trunk.v_proj)
-        bundle.v_lora.accumulate_grad(gA_v, gB_v)
-        gA_q, gB_q, d_in_q = bundle.q_lora.compute_lora_gradients(d_v, h_norm1, trunk.q_proj)
-        bundle.q_lora.accumulate_grad(gA_q, gB_q)
-
+        # Attention sublayer backward through the real KDA / MLA sublayer
         grad_h_in = grad_h_mid.clone() if is_torch else grad_h_mid.copy()
-        for d_in in (d_in_v, d_in_q):
-            if d_in is None:
-                continue
-            grad_h_in = grad_h_in + (d_in.view_as(grad_h_in) if is_torch else d_in.reshape(grad_h_in.shape))
+        grad_attn_in = self._attention_backward(layer_idx, bundle, h_norm1, grad_h_mid)
+        if grad_attn_in is not None:
+            grad_h_in = grad_h_in + (
+                grad_attn_in.view_as(grad_h_in) if is_torch else grad_attn_in.reshape(grad_h_in.shape)
+            )
         return grad_h_in
 
     def backward_layer(
@@ -595,8 +701,7 @@ class LazyLoRATrainer:
         if is_torch:
             # Recompute Attention forward
             h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
-            v = F.linear(h_norm1, trunk.v_proj) + bundle.v_lora.forward_lora_only(h_norm1)
-            attn_out = F.linear(v, trunk.o_proj)
+            attn_out = self._attention_forward(layer_idx, bundle, h_norm1)
             h_mid = h_in + attn_out
 
             # Recompute MoE forward states
@@ -687,25 +792,16 @@ class LazyLoRATrainer:
 
             grad_h_mid.add_(grad_moe_norm)
 
-            # Attention Sublayer Backward
-            d_v = F.linear(grad_h_mid, trunk.o_proj.t())
-            gA_v, gB_v, d_in_v = bundle.v_lora.compute_lora_gradients(d_v, h_norm1, trunk.v_proj)
-            bundle.v_lora.accumulate_grad(gA_v, gB_v)
-
-            gA_q, gB_q, d_in_q = bundle.q_lora.compute_lora_gradients(d_v, h_norm1, trunk.q_proj)
-            bundle.q_lora.accumulate_grad(gA_q, gB_q)
-
+            # Attention Sublayer Backward, through the real KDA / MLA sublayer
             grad_h_in = grad_h_mid.clone()
-            if d_in_v is not None:
-                grad_h_in.add_(d_in_v)
-            if d_in_q is not None:
-                grad_h_in.add_(d_in_q)
+            grad_attn_in = self._attention_backward(layer_idx, bundle, h_norm1, grad_h_mid)
+            if grad_attn_in is not None:
+                grad_h_in.add_(grad_attn_in.view_as(grad_h_in))
         else:
             # NumPy analytical backward
             orig_shape = h_in.shape
             h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
-            v = np.matmul(h_norm1, trunk.v_proj.T) + bundle.v_lora.forward_lora_only(h_norm1)
-            attn_out = np.matmul(v, trunk.o_proj.T)
+            attn_out = self._attention_forward(layer_idx, bundle, h_norm1)
             h_mid = h_in + attn_out
 
             h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
@@ -776,18 +872,10 @@ class LazyLoRATrainer:
             grad_moe_norm += np.matmul(grad_latent_in, latent_down_w).reshape(orig_shape)
             grad_h_mid += grad_moe_norm
 
-            d_v = np.matmul(grad_h_mid, trunk.o_proj)
-            gA_v, gB_v, d_in_v = bundle.v_lora.compute_lora_gradients(d_v, h_norm1, trunk.v_proj)
-            bundle.v_lora.accumulate_grad(gA_v, gB_v)
-
-            gA_q, gB_q, d_in_q = bundle.q_lora.compute_lora_gradients(d_v, h_norm1, trunk.q_proj)
-            bundle.q_lora.accumulate_grad(gA_q, gB_q)
-
             grad_h_in = grad_h_mid.copy()
-            if d_in_v is not None:
-                grad_h_in += d_in_v.reshape(orig_shape)
-            if d_in_q is not None:
-                grad_h_in += d_in_q.reshape(orig_shape)
+            grad_attn_in = self._attention_backward(layer_idx, bundle, h_norm1, grad_h_mid)
+            if grad_attn_in is not None:
+                grad_h_in += np.asarray(grad_attn_in, dtype=grad_h_in.dtype).reshape(orig_shape)
 
         self.trunk_streamer.release_layer_trunk()
         self.expert_streamer.evict_layer_experts(layer_idx)

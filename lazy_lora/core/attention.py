@@ -58,6 +58,13 @@ def short_convolution(x, weight):
     return F.silu(y.transpose(1, 2))
 
 
+def _with_lora(base, x, lora):
+    """base + LoRA delta, when an adapter is attached to this projection."""
+    if lora is None:
+        return base
+    return base + lora.forward_lora_only(x)
+
+
 def kda_attention(
     h,
     w,
@@ -65,6 +72,8 @@ def kda_attention(
     head_dim: int = 128,
     gate_lower_bound: Optional[float] = -5.0,
     eps: float = 1e-5,
+    q_lora=None,
+    v_lora=None,
 ):
     """
     Kimi Delta Attention.
@@ -78,9 +87,9 @@ def kda_attention(
     B, T, _ = h.shape
     H, D = num_heads, head_dim
 
-    q = short_convolution(F.linear(h, w.q_proj), w.q_conv1d)
+    q = short_convolution(_with_lora(F.linear(h, w.q_proj), h, q_lora), w.q_conv1d)
     k = short_convolution(F.linear(h, w.k_proj), w.k_conv1d)
-    v = short_convolution(F.linear(h, w.v_proj), w.v_conv1d)
+    v = short_convolution(_with_lora(F.linear(h, w.v_proj), h, v_lora), w.v_conv1d)
 
     q = l2_norm(q.view(B, T, H, D).float())
     k = l2_norm(k.view(B, T, H, D).float())
@@ -129,6 +138,8 @@ def mla_attention(
     v_head_dim: int = 128,
     kv_lora_rank: int = 512,
     eps: float = 1e-5,
+    q_lora=None,
+    v_lora=None,
 ):
     """
     Multi-head Latent Attention (DeepSeek-style), with `mla_use_nope` semantics:
@@ -139,14 +150,15 @@ def mla_attention(
     q_head_dim = qk_nope_head_dim + qk_rope_head_dim
     scaling = q_head_dim ** -0.5
 
-    q = F.linear(h, w.q_a_proj)
-    q = rms_norm(q, w.q_a_layernorm, eps=eps)
-    q = F.linear(q, w.q_b_proj).view(B, T, H, q_head_dim).transpose(1, 2)
+    q_latent = rms_norm(F.linear(h, w.q_a_proj), w.q_a_layernorm, eps=eps)
+    q = _with_lora(F.linear(q_latent, w.q_b_proj), q_latent, q_lora)
+    q = q.view(B, T, H, q_head_dim).transpose(1, 2)
     q_pass, q_rot = torch.split(q, [qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
     compressed = F.linear(h, w.kv_a_proj_with_mqa)
     k_latent, k_rot = torch.split(compressed, [kv_lora_rank, qk_rope_head_dim], dim=-1)
-    kv = F.linear(rms_norm(k_latent, w.kv_a_layernorm, eps=eps), w.kv_b_proj)
+    kv_latent = rms_norm(k_latent, w.kv_a_layernorm, eps=eps)
+    kv = _with_lora(F.linear(kv_latent, w.kv_b_proj), kv_latent, v_lora)
     kv = kv.view(B, T, H, qk_nope_head_dim + v_head_dim).transpose(1, 2)
     k_pass, value = torch.split(kv, [qk_nope_head_dim, v_head_dim], dim=-1)
 
