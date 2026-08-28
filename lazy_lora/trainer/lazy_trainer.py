@@ -24,7 +24,7 @@ from lazy_lora.core.config import LazyLoraConfig, get_default_config
 from lazy_lora.core.lora_layer import LazyLoRALinear
 from lazy_lora.core.moe_router import KimiK3MoERouter
 from lazy_lora.core.situ_activation import situ_glu_forward, situ_glu_backward
-from lazy_lora.core.attention import kda_attention, mla_attention
+from lazy_lora.core.attention import kda_attention, mla_attention, apply_attn_res
 from lazy_lora.streaming.mmap_loader import MmapTensorStreamer
 from lazy_lora.streaming.trunk_streamer import LayerTrunkStreamer, RMSNormFunction
 from lazy_lora.streaming.expert_streamer import DynamicExpertStreamer
@@ -278,6 +278,25 @@ class LazyLoRATrainer:
             yield start, end, band
             del band
 
+    def _finalize_hidden(self, hidden_state):
+        """
+        Close out the residual bank and apply the model's final RMSNorm.
+
+        After the last layer the model mixes the bank into the stream one more time with
+        its own output gate, then applies model.norm before the LM head.
+        """
+        proj = self.mmap_streamer.load_tensor("model.output_attn_res_proj.weight", target_device=self.device)
+        norm = self.mmap_streamer.load_tensor("model.output_attn_res_norm.weight", target_device=self.device)
+        if proj is not None and norm is not None:
+            hidden_state = self._mix_block_residual(hidden_state, proj, norm)
+
+        final_norm = self.mmap_streamer.load_tensor("model.norm.weight", target_device=self.device)
+        if final_norm is not None:
+            hidden_state = RMSNormFunction.forward(
+                hidden_state, final_norm, eps=self.config.model.rms_norm_eps
+            )
+        return hidden_state
+
     def _project_lm_head(self, hidden_state: Union["torch.Tensor", np.ndarray]) -> Union["torch.Tensor", np.ndarray]:
         """Project final hidden state through the LM head, band by band."""
         vocab_sz = self.config.model.vocab_size
@@ -320,6 +339,50 @@ class LazyLoRATrainer:
                 part = np.matmul(grad_logits[..., start:end], np.asarray(w, dtype=np.float32))
                 grad_h = part if grad_h is None else grad_h + part
             return grad_h
+
+    def _reset_block_residual(self) -> None:
+        """Start a fresh residual bank for a new forward pass."""
+        self._block_residual = None
+
+    def _mix_block_residual(self, prefix_sum, proj_weight, norm_weight):
+        """Mix the residual bank into the live stream (identity when the bank is empty)."""
+        bank = getattr(self, "_block_residual", None)
+        if bank is None or bank.shape[1] == 0 or not isinstance(prefix_sum, torch.Tensor):
+            return prefix_sum
+
+        shape = prefix_sum.shape
+        flat = prefix_sum.reshape(-1, shape[-1])
+        mixed = apply_attn_res(
+            flat, bank.to(flat.dtype), proj_weight, norm_weight,
+            eps=self.config.model.rms_norm_eps,
+        )
+        return mixed.view(shape)
+
+    def _block_residual_pre_attention(self, layer_idx: int, trunk, h_in):
+        """
+        Mix the bank into the stream, then every `attn_res_block_size` layers push the
+        stream onto the bank and restart it (prefix_sum becomes None).
+
+        Returns (prefix_sum, hidden) where `hidden` feeds the attention sublayer.
+        """
+        block_size = self.config.model.attn_res_block_size
+        prefix_sum = h_in
+        hidden = self._mix_block_residual(
+            prefix_sum, trunk.self_attention_res_proj, trunk.self_attention_res_norm
+        )
+
+        if block_size and layer_idx % block_size == 0 and isinstance(h_in, torch.Tensor):
+            flat = h_in.reshape(-1, h_in.shape[-1]).unsqueeze(1)
+            bank = getattr(self, "_block_residual", None)
+            self._block_residual = flat if bank is None else torch.cat([bank, flat], dim=1)
+            prefix_sum = None
+
+        return prefix_sum, hidden
+
+    @staticmethod
+    def _add_to_prefix(prefix_sum, sublayer_out):
+        """prefix_sum + sublayer output, where a restarted stream starts from the output."""
+        return sublayer_out if prefix_sum is None else prefix_sum + sublayer_out
 
     def _route(self, layer_idx: int, h_moe_norm):
         """
@@ -479,7 +542,7 @@ class LazyLoRATrainer:
             situ = situ_glu_forward(gate, up)
             mlp_out = np.matmul(situ, down_w.T) + bundle.dense_down_lora.forward_lora_only(situ)
         del gate_w, up_w, down_w, gate, up, situ
-        return h_mid + mlp_out
+        return mlp_out
 
     def forward_layer(
         self,
@@ -487,38 +550,46 @@ class LazyLoRATrainer:
         h_in: Union["torch.Tensor", np.ndarray],
     ) -> Tuple[Union["torch.Tensor", np.ndarray], List[int]]:
         """
-        Executes out-of-core forward pass for a single layer:
-        1. Save h_in to D: drive activation ring buffer.
-        2. Attention forward with dense trunk streaming.
-        3. MoE Router top-16 expert selection & dispatch.
-        4. Active expert forward + LoRA branches.
+        Executes out-of-core forward pass for a single layer, following the block-residual
+        structure of KimiDecoderLayer:
+
+        1. Save the incoming residual stream to the D: drive activation ring buffer.
+        2. Mix the residual bank into the stream, and every `attn_res_block_size` layers
+           push the stream onto the bank and restart it.
+        3. Attention (KDA or MLA) with dense trunk streaming.
+        4. Mix again, then the MoE / dense MLP sublayer.
         5. Evict layer weights from memory.
         """
         # 1. Save boundary activation to D: SSD
         self.act_buffer.save_activation(layer_idx, h_in)
 
-        # 2. Attention & Norm
         trunk = self.trunk_streamer.load_layer_trunk(layer_idx)
         bundle = self.lora_layers[layer_idx]
 
-        h_norm = RMSNormFunction.forward(h_in, trunk.input_layernorm)
+        # 2. Block residual: mix the bank into the live stream
+        prefix_sum, hidden = self._block_residual_pre_attention(layer_idx, trunk, h_in)
 
-        # Real Kimi Linear attention: KDA on most layers, MLA on the full-attention ones.
+        h_norm = RMSNormFunction.forward(hidden, trunk.input_layernorm)
+
+        # 3. Real Kimi Linear attention: KDA on most layers, MLA on the full-attention ones.
         attn_out = self._attention_forward(layer_idx, bundle, h_norm)
-        h_mid = h_in + attn_out
+        prefix_sum = attn_out if prefix_sum is None else prefix_sum + attn_out
         del attn_out
+
+        # 4. Mix again before the MoE / MLP sublayer
+        h_mid = self._mix_block_residual(prefix_sum, trunk.mlp_res_proj, trunk.mlp_res_norm)
 
         self.trunk_streamer.release_layer_trunk()
 
-        # 2b. Dense layers: Kimi K3's first `first_k_dense_replace` layers have a plain MLP
+        # 5. Dense layers: Kimi K3's first `first_k_dense_replace` layers have a plain MLP
         # and no experts at all, so routing them through the MoE path would fabricate
         # hundreds of synthetic experts for tensors that do not exist on disk.
         if bundle.is_dense:
             h_mlp_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-            h_out = self._dense_mlp_forward(layer_idx, bundle, h_mid, h_mlp_norm)
-            return h_out, []
+            mlp_out = self._dense_mlp_forward(layer_idx, bundle, h_mid, h_mlp_norm)
+            return self._add_to_prefix(prefix_sum, mlp_out), []
 
-        # 3. MoE Routing
+        # 6. MoE Routing
         h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
         topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
         active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
@@ -592,7 +663,7 @@ class LazyLoRATrainer:
             del latent_up_w, latent_norm_w, routed_latent_out, h_latent
 
             moe_out = shared_out + routed_out.view_as(h_mid)
-            h_out = h_mid + moe_out
+            h_out = self._add_to_prefix(prefix_sum, moe_out)
         else:
             # NumPy path
             # Shared expert
@@ -627,7 +698,7 @@ class LazyLoRATrainer:
             routed_out = np.matmul(routed_latent_out, latent_up_w.T)
 
             moe_out = shared_out + routed_out.reshape(h_mid.shape)
-            h_out = h_mid + moe_out
+            h_out = self._add_to_prefix(prefix_sum, moe_out)
 
         # 5. Evict layer expert weights from memory
         self.expert_streamer.evict_layer_experts(layer_idx)
@@ -916,6 +987,7 @@ class LazyLoRATrainer:
         try:
             h_current = self._embed_tokens(input_ids)
             last_active_experts = []
+            self._reset_block_residual()
 
             # 2. Sequential Layer-by-Layer Forward Pass (Layer 0 -> Layer L-1)
             for l in range(num_layers):
@@ -924,7 +996,8 @@ class LazyLoRATrainer:
                 h_current, last_active_experts = self.forward_layer(l, h_current)
 
             print(f"\r  ⚡ [FORWARD COMPLETE] (93 Layers) -> Computing LM Head Cross-Entropy Loss...", end="", flush=True)
-            # 3. Final LM Head Projection and Loss
+            # 3. Close the residual bank, final norm, LM head projection and loss
+            h_current = self._finalize_hidden(h_current)
             logits = self._project_lm_head(h_current)
             loss_val, grad_logits = compute_cross_entropy_loss(
                 logits,

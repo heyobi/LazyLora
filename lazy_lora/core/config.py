@@ -49,6 +49,9 @@ class KimiK3ArchitectureConfig:
     short_conv_kernel_size: int = 4
     gate_lower_bound: float = -5.0
     mla_use_output_gate: bool = True
+    # Cross-layer block residuals: every attn_res_block_size layers the residual stream is
+    # pushed onto a bank and restarted, and the bank is mixed back in via a learned softmax.
+    attn_res_block_size: int = 12
     situ_beta: float = 4.0
     situ_linear_beta: float = 25.0
     activation_func: str = "situ"

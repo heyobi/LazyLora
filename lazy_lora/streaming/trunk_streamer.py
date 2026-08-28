@@ -97,6 +97,12 @@ class LayerTrunkStreamer:
         
         in_norm = self.mmap_streamer.load_tensor(f"{prefix}input_layernorm.weight", target_device=self.device)
         post_norm = self.mmap_streamer.load_tensor(f"{prefix}post_attention_layernorm.weight", target_device=self.device)
+
+        # Block-residual gates (attn_res_block_size mechanism)
+        res = {}
+        for name in ("self_attention_res_norm", "self_attention_res_proj",
+                     "mlp_res_norm", "mlp_res_proj"):
+            res[name] = self.mmap_streamer.load_tensor(f"{prefix}{name}.weight", target_device=self.device)
         q_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.q_proj.weight", target_device=self.device)
         k_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.k_proj.weight", target_device=self.device)
         v_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.v_proj.weight", target_device=self.device)
@@ -120,6 +126,15 @@ class LayerTrunkStreamer:
                 v_proj = (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32)
                 o_proj = (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32)
 
+        for name, value in list(res.items()):
+            if value is not None:
+                continue
+            shape = (1, d_hidden) if name.endswith("_proj") else (d_hidden,)
+            if HAS_TORCH:
+                res[name] = torch.ones(shape, dtype=torch.bfloat16, device=self.device)
+            else:
+                res[name] = np.ones(shape, dtype=np.float32)
+
         self._current_bundle = TrunkWeightBundle(
             layer_idx=layer_idx,
             input_layernorm=in_norm,
@@ -129,6 +144,8 @@ class LayerTrunkStreamer:
             v_proj=v_proj,
             o_proj=o_proj,
         )
+        for name, value in res.items():
+            setattr(self._current_bundle, name, value)
         return self._current_bundle
 
     def load_attention_weights(

@@ -302,7 +302,7 @@ Madem neredeyse tüm uzmanlar okunuyor, bu bir **sıralı tarama** olmalıdır. 
 
 ---
 
-## 13. AÇIK SORUN: MLA Katmanlarında Aktivasyon Patlaması
+## 13. Aktivasyon Büyümesinin İncelenmesi ve SiTU Aktivasyon Hatası
 
 Katmanlar arası gizli durum standart sapması:
 
@@ -321,5 +321,49 @@ KDA katmanları sağlıklı ilerlerken MLA katmanı çıkışı ~200 kat büyüt
 
 Referans `KimiDecoderLayer._forward_attn_residual`, her 12 katmanda bir gizli durumu bir "blok artık bankasına" yazar ve öğrenilmiş skaler kapılarla artık akışını yeniden ölçekler. Motorumuzda bu mekanizma **hiç yok**; artık akışı $h + \text{attn} + \text{moe}$ olarak dizginsiz büyüyor. Bu, tam olarak aktivasyon büyümesini denetleyen mekanizmadır.
 
-Bu düzeltilmeden yapılacak bir eğitim adımı anlamlı bir loss üretmeyecektir.
+### 13.1 Blok-Artık Mekanizması Uygulandı
+
+Referans `_apply_attn_res`, artık akışını **toplamaz**; bankadaki anlık görüntüler ile canlı akışı, öğrenilmiş skorlar üzerinden **softmax ile dışbükey karışım** yapar:
+
+$$v = [\text{bank}; \text{prefix}], \quad k = \operatorname{RMSNorm}(v), \quad p = \operatorname{softmax}\big(\textstyle\sum_d k_d \cdot (w^{\text{norm}}_d w^{\text{proj}}_d)\big), \quad h = p^\top v$$
+
+Ayrıca her `attn_res_block_size = 12` katmanda bir akış bankaya yazılıp **sıfırdan başlatılır**. Bu mekanizma [attention.py](file:///c:/Users/Dell/Desktop/LazyLora/lazy_lora/core/attention.py) içine `apply_attn_res` olarak eklendi ve `forward_layer` referansın yapısına göre yeniden düzenlendi (`prefix_sum` + banka), sonda `output_attn_res_proj/norm` ve `model.norm` uygulanacak şekilde.
+
+### 13.2 Asıl Hata: SiTU Aktivasyonu Yanlış Tanımlanmıştı
+
+Katman içi ölçüm, büyümenin kaynağının dikkat değil **paylaşılan uzman** olduğunu gösterdi: girdi birim normda iken çıktı `std = 8.12`.
+
+Referans tanım ([modeling_kimi_linear.py](file:///c:/Users/Dell/Desktop/LazyLora/), `SituAndMul`):
+
+$$\text{situ}(g) = \beta \tanh(g/\beta)\,\sigma(g), \qquad u' = \gamma \tanh(u/\gamma), \qquad \text{out} = \text{situ}(g)\cdot u'$$
+
+$\beta = 4{,}0$ (`activation_situ_beta`), $\gamma = 25{,}0$ (`activation_situ_linear_beta`).
+
+Motordaki tanım ise şuydu:
+
+$$\text{situ}_{\text{yanlış}}(g) = g \cdot \tanh(4g)$$
+
+İki temel fark:
+
+| Özellik | Motordaki (yanlış) | Referans (doğru) |
+| :--- | :--- | :--- |
+| Sınırlılık | **Sınırsız**; $\lvert g\rvert$ büyüdükçe doğrusal büyür | $\pm\beta = \pm 4$ ile **sınırlı** |
+| Negatif girdi | $g\cdot\tanh(4g) > 0$ → negatifi **pozitife çevirir** ($\approx \lvert g \rvert$) | $\sigma(g) \to 0$ → **bastırır** |
+| Up dalı | Dokunulmaz | $\pm 25$ ile yumuşak kırpılır |
+
+Yani kanalların yaklaşık yarısı bastırılacakken tam tersine yükseltiliyordu. Düzeltmeden sonra paylaşılan uzman çıktısı `8.12 → 4.47`, katman 3 çıkışı ise `18.88 → 5.27` seviyesine indi.
+
+### 13.3 Kalan Büyüme Modelin Kendi Davranışıdır
+
+Katman katman izleme, kalan sıçramanın bir hata olmadığını gösterdi. RMSNorm çıktısı, normalize edilmiş girdinin **katmanın kendi norm ağırlığıyla** çarpımıdır ve K3'te bu ağırlıklar katmanlar arasında çok değişkendir:
+
+| Katman | `input_layernorm` sonrası std | `post_attention_layernorm` sonrası std |
+| :--- | ---: | ---: |
+| 0 | 0,164 | 0,011 |
+| 1 | 0,193 | 0,098 (absmax 8,56) |
+| 3 | 0,999 | 0,999 |
+
+Aynı birim-norm girdiyle beslendiğinde tüm katmanların paylaşılan uzmanları benzer çıktı verir (`std` 2,4 – 4,1). Dolayısıyla anormal olan katman 3'ün büyük olması değil, katman 0–2'nin küçük olmasıdır; bu da o katmanların norm ağırlıklarının küçüklüğünden kaynaklanır. Ön-normalizasyonlu bir mimaride artık akışının derinlikle büyümesi beklenen davranıştır ve her alt katman girdisi zaten normalize edilmektedir.
+
+**Sonuç:** Bu bölümde "açık sorun" olarak kaydedilen aktivasyon patlamasının gerçek nedeni SiTU hatasıydı ve giderilmiştir. Nihai doğrulama, gerçek Türkçe metin üzerinde tam 93 katmanlık bir ileri geçişin **cross-entropy loss** değeridir: eğitilmiş bir modelin doğal metinde 2–4 aralığında loss vermesi beklenir; ~12 (yani $\ln 163840$) değeri boru hattının hâlâ bozuk olduğu anlamına gelir.
 

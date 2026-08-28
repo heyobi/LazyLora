@@ -44,6 +44,34 @@ def l2_norm(x, eps: float = 1e-6):
     return x * torch.rsqrt(x.pow(2).sum(-1, keepdim=True) + eps)
 
 
+def apply_attn_res(prefix_sum, block_residual, proj_weight, norm_weight, eps: float = 1e-5):
+    """
+    Kimi Linear's block-residual mixer.
+
+    Instead of accumulating sublayer outputs into one ever-growing residual stream, the
+    model keeps a bank of residual snapshots (one every `attn_res_block_size` layers) and
+    mixes them with the live stream through a softmax over learned per-vector scores. The
+    result is a convex combination, which is what keeps activations bounded across 93
+    layers - without it the stream grows without limit.
+
+    prefix_sum:     [N, hidden]
+    block_residual: [N, num_blocks, hidden]  (may have num_blocks == 0)
+    proj_weight:    [1, hidden]   (self_attention_res_proj / mlp_res_proj / output_attn_res_proj)
+    norm_weight:    [hidden]      (the matching *_res_norm)
+    """
+    v = torch.cat((block_residual, prefix_sum.unsqueeze(1)), dim=1)
+    v_float = v.float()
+    variance = v_float.pow(2).mean(-1, keepdim=True)
+    k = v_float * torch.rsqrt(variance + eps)
+
+    score_weight = norm_weight.float() * proj_weight.squeeze(0).float()
+    scores = (k * score_weight).sum(-1)                 # [N, num_blocks + 1]
+    probs = scores.softmax(-1).unsqueeze(1)             # [N, 1, num_blocks + 1]
+
+    mixed = torch.matmul(probs, v_float).squeeze(1)     # [N, hidden]
+    return mixed.to(v.dtype)
+
+
 def short_convolution(x, weight):
     """
     Causal depthwise convolution followed by SiLU, as in `fla.modules.ShortConvolution`.
