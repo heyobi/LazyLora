@@ -53,6 +53,11 @@ def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
       is a sign bit plus a 3-bit index into FP4_E2M1_MAGNITUDES.
     * `weight_scale` holds one E8M0 exponent per group of 32 input channels, so the
       group multiplier is 2^(scale - 127), not the raw byte value.
+    * A scale byte of 255 is E8M0's NaN encoding and marks a group that contributes
+      nothing. Layer 23 is the first layer whose experts carry them, and taking
+      2^(255-127) there produced inf, then 0 * inf = NaN, which propagated through
+      every remaining layer of the forward pass. The reference kernel skips those
+      groups outright (`if (sb == 255) continue;` in k3_matmul_mxfp4).
 
     Sanity check on layer 1 expert 0: the result lands at |w| ~ 0.015, matching the
     unquantised shared expert of the same layer (absmean 0.0149).
@@ -68,11 +73,17 @@ def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
 
         if weight_scale.dim() == 2:
             groups = max(values.shape[1] // weight_scale.shape[1], 1)
-            exponent = weight_scale.to(torch.float32).repeat_interleave(groups, dim=1)
-            exponent = exponent[:, :values.shape[1]]
+            raw_scale = weight_scale.repeat_interleave(groups, dim=1)[:, :values.shape[1]]
         else:
-            exponent = weight_scale.to(torch.float32).view(-1, 1)
-        values = values * torch.exp2(exponent - 127.0)
+            raw_scale = weight_scale.view(-1, 1)
+
+        exponent = raw_scale.to(torch.float32)
+        multiplier = torch.where(
+            raw_scale == 255,
+            torch.zeros((), dtype=torch.float32, device=values.device),
+            torch.exp2(exponent - 127.0),
+        )
+        values = values * multiplier
         return values.to(torch.bfloat16)
 
     if isinstance(weight_packed, np.ndarray):
@@ -86,11 +97,13 @@ def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
 
         if weight_scale.ndim == 2:
             groups = max(values.shape[1] // weight_scale.shape[1], 1)
-            exponent = np.repeat(weight_scale.astype(np.float32), groups, axis=1)
-            exponent = exponent[:, :values.shape[1]]
+            raw_scale = np.repeat(weight_scale, groups, axis=1)[:, :values.shape[1]]
         else:
-            exponent = weight_scale.astype(np.float32).reshape(-1, 1)
-        return values * np.exp2(exponent - 127.0)
+            raw_scale = weight_scale.reshape(-1, 1)
+
+        multiplier = np.where(raw_scale == 255, 0.0,
+                              np.exp2(raw_scale.astype(np.float32) - 127.0))
+        return values * multiplier
 
     return weight_packed
 
