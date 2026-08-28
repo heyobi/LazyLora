@@ -109,22 +109,33 @@ class LayerTrunkStreamer:
         o_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.o_proj.weight", target_device=self.device)
 
         d_hidden = self.hidden_size
-        if in_norm is None or q_proj is None:
-            # Synthetic default for testing/profiling
-            if HAS_TORCH:
-                in_norm = torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
-                post_norm = torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
-                q_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
-                k_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
-                v_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
-                o_proj = torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
+
+        # Each tensor falls back on its own. Gating the whole bundle on q_proj threw away
+        # the real norms on every MLA layer, which has q_a_proj / q_b_proj and no q_proj:
+        # input_layernorm and post_attention_layernorm silently became all-ones there, so
+        # the MoE saw a unit-scale input and its output came out roughly 90x too large.
+        # The attention projections below are only used by the mock paths now; the real
+        # ones are streamed by load_attention_weights per layer type.
+        if in_norm is None:
+            in_norm = (torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
+                       if HAS_TORCH else np.ones(d_hidden, dtype=np.float32))
+        if post_norm is None:
+            post_norm = (torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
+                         if HAS_TORCH else np.ones(d_hidden, dtype=np.float32))
+        for name, value in (("q_proj", q_proj), ("k_proj", k_proj),
+                            ("v_proj", v_proj), ("o_proj", o_proj)):
+            if value is not None:
+                continue
+            synth = (torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
+                     if HAS_TORCH else (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32))
+            if name == "q_proj":
+                q_proj = synth
+            elif name == "k_proj":
+                k_proj = synth
+            elif name == "v_proj":
+                v_proj = synth
             else:
-                in_norm = np.ones(d_hidden, dtype=np.float32)
-                post_norm = np.ones(d_hidden, dtype=np.float32)
-                q_proj = (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32)
-                k_proj = (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32)
-                v_proj = (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32)
-                o_proj = (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32)
+                o_proj = synth
 
         for name, value in list(res.items()):
             if value is not None:

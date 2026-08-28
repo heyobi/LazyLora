@@ -108,6 +108,115 @@ class TestReferenceOps(unittest.TestCase):
         self.assert_matches(g.numpy(), as_array(fx["g"]), "kda_decay.g")
         self.assert_matches(torch.exp(g).numpy(), as_array(fx["alpha"]), "kda_decay.alpha")
 
+    def test_router(self):
+        """Selection uses biased scores; the weights come from the unbiased ones."""
+        from lazy_lora.core.moe_router import KimiK3MoERouter
+        fx = load_fixture("router")
+        x = torch.from_numpy(as_array(fx["in"]))
+        router = KimiK3MoERouter(
+            hidden_size=x.shape[-1],
+            num_experts=fx["n_experts"],
+            top_k=fx["top_k"],
+        )
+        idx, weight = router.forward(
+            x,
+            weight=torch.from_numpy(as_array(fx["gate_weight"])),
+            bias=torch.from_numpy(as_array(fx["bias"])),
+        )
+        # Expert order within a row is not part of the contract; compare as sorted pairs.
+        want_idx = as_array(fx["topk_idx"]).astype(np.int64)
+        want_w = as_array(fx["topk_weight"])
+        got = {(r, int(i)): float(w) for r, (ii, ww) in enumerate(zip(idx.tolist(), weight.tolist()))
+               for i, w in zip(ii, ww)}
+        want = {(r, int(i)): float(w) for r, (ii, ww) in enumerate(zip(want_idx.tolist(), want_w.tolist()))
+                for i, w in zip(ii, ww)}
+        self.assertEqual(sorted(got), sorted(want), "router: selected experts differ")
+        self.assert_matches([got[k] for k in sorted(got)],
+                            [want[k] for k in sorted(want)], "router.weights")
+
+    def test_attn_res(self):
+        """Block-residual mixing: keys are RMSNormed, the values mixed are raw."""
+        from lazy_lora.core.attention import apply_attn_res
+        fx = load_fixture("attnres")
+        got = apply_attn_res(
+            torch.from_numpy(as_array(fx["prefix_sum"])),
+            torch.from_numpy(as_array(fx["block_residual"])),
+            torch.from_numpy(as_array(fx["proj_weight"])).view(1, -1),
+            torch.from_numpy(as_array(fx["norm_weight"])),
+            eps=fx["eps"],
+        )
+        self.assert_matches(got.numpy(), as_array(fx["out"]), "attnres")
+
+    def test_mla(self):
+        from lazy_lora.core.attention import mla_attention
+        fx = load_fixture("mla")
+
+        class W:
+            pass
+
+        w = W()
+        for key in ("q_a_proj", "q_a_layernorm", "q_b_proj", "kv_a_proj_with_mqa",
+                    "kv_a_layernorm", "kv_b_proj", "o_proj", "g_proj"):
+            setattr(w, key, torch.from_numpy(as_array(fx[f"{key}_weight"])))
+
+        got = mla_attention(
+            torch.from_numpy(as_array(fx["in"])), w,
+            num_heads=fx["n_heads"],
+            qk_nope_head_dim=fx["qk_nope"],
+            qk_rope_head_dim=fx["qk_rope"],
+            v_head_dim=fx["v_head"],
+            kv_lora_rank=fx["kv_lora"],
+            eps=fx["rms_eps"],
+        )
+        self.assert_matches(got.numpy(), as_array(fx["out"]), "mla")
+
+    def test_moe_block(self):
+        """The whole latent MoE block: shared expert + routed experts through the latent space."""
+        from lazy_lora.core.attention import rms_norm
+        from lazy_lora.core.moe_router import KimiK3MoERouter
+        fx = load_fixture("moe")
+
+        x = torch.from_numpy(as_array(fx["in"]))
+        hidden, latent = fx["hidden"], fx["latent"]
+
+        # Shared expert, in hidden space
+        s_gate = F.linear(x, torch.from_numpy(as_array(fx["shared_w1_weight"])))
+        s_up = F.linear(x, torch.from_numpy(as_array(fx["shared_w3_weight"])))
+        s_act = situ_glu_forward(s_gate, s_up, beta=fx["situ_b1"], linear_beta=fx["situ_b2"])
+        shared_out = F.linear(s_act, torch.from_numpy(as_array(fx["shared_w2_weight"])))
+
+        # Routing
+        router = KimiK3MoERouter(hidden_size=hidden, num_experts=fx["n_experts"],
+                                 top_k=fx["top_k"], routed_scaling_factor=fx["routed_scale"])
+        topk_idx, topk_w = router.forward(
+            x,
+            weight=torch.from_numpy(as_array(fx["gate_weight"])),
+            bias=torch.from_numpy(as_array(fx["e_score_correction_bias"])),
+        )
+
+        # Routed experts, in latent space
+        flat = x.reshape(-1, hidden)
+        h_latent = F.linear(flat, torch.from_numpy(as_array(fx["down_weight"])))
+        routed = torch.zeros_like(h_latent)
+        for e in range(fx["n_experts"]):
+            mask = (topk_idx == e)
+            if not mask.any():
+                continue
+            w1 = torch.from_numpy(as_array(fx[f"experts_{e}_w1_weight"]))
+            w3 = torch.from_numpy(as_array(fx[f"experts_{e}_w3_weight"]))
+            w2 = torch.from_numpy(as_array(fx[f"experts_{e}_w2_weight"]))
+            act = situ_glu_forward(F.linear(h_latent, w1), F.linear(h_latent, w3),
+                                   beta=fx["situ_b1"], linear_beta=fx["situ_b2"])
+            weights = (topk_w * mask.to(topk_w.dtype)).sum(dim=-1, keepdim=True)
+            routed = routed + F.linear(act, w2) * weights
+
+        if fx["latent_norm"]:
+            routed = rms_norm(routed, torch.from_numpy(as_array(fx["norm_weight"])), eps=fx["rms_eps"])
+        routed_out = F.linear(routed, torch.from_numpy(as_array(fx["up_weight"])))
+
+        got = shared_out + routed_out.view_as(shared_out)
+        self.assert_matches(got.numpy(), as_array(fx["out"]), "moe")
+
 
 if __name__ == "__main__":
     unittest.main()
