@@ -46,6 +46,31 @@ FP4_E2M1_MAGNITUDES = FP4_E2M1[:8]      # kept for callers that want magnitudes 
 
 _PAIR_LUT = None                        # [256, 2] float32: byte -> (even, odd) element
 
+# 2^(253-127) * 6 already overflows float32, so any scale byte at or above this marks a
+# group that cannot be represented - in practice, damaged bytes. 255 is E8M0's own NaN.
+MAX_SAFE_E8M0 = 253
+
+_damaged_groups = 0
+_damaged_total = 0
+
+
+def _note_damaged_groups(count: int, total: int) -> None:
+    """Count unusable scale groups and say so once every 10000, not once per tensor."""
+    global _damaged_groups, _damaged_total
+    before = _damaged_groups
+    _damaged_groups += count
+    _damaged_total += total
+    if _damaged_groups // 10000 != before // 10000:
+        print(f"\n[!] {_damaged_groups} unusable MXFP4 scale groups skipped so far "
+              f"({_damaged_groups / max(_damaged_total, 1):.3%} of those read). "
+              f"These are damaged bytes in the checkpoint; the groups contribute zero.",
+              flush=True)
+
+
+def damaged_group_stats():
+    """(unusable groups, groups inspected) since the process started."""
+    return _damaged_groups, _damaged_total
+
 
 def _pair_lut(device):
     """
@@ -76,10 +101,15 @@ def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
     * `weight_scale` holds one E8M0 exponent per group of 32 input channels, so the
       group multiplier is 2^(scale - 127), not the raw byte value.
     * A scale byte of 255 is E8M0's NaN encoding and marks a group that contributes
-      nothing. Layer 23 is the first layer whose experts carry them, and taking
-      2^(255-127) there produced inf, then 0 * inf = NaN, which propagated through
-      every remaining layer of the forward pass. The reference kernel skips those
-      groups outright (`if (sb == 255) continue;` in k3_matmul_mxfp4).
+      nothing. The reference kernel skips those groups outright
+      (`if (sb == 255) continue;` in k3_matmul_mxfp4).
+    * Anything at or above 253 is treated the same way. 2^(253-127) multiplied by the
+      largest FP4 magnitude of 6 already exceeds float32, so such a group can only
+      yield inf, and inf * 0 in the next matmul yields NaN which then travels through
+      every remaining layer. No trained weight is 1e38; a scale that large means the
+      bytes are damaged. This checkpoint has such regions - three crashes during the
+      download left corrupted expert blocks in a handful of shards - and one of them
+      turned an entire 93-layer forward pass into NaN.
 
     Sanity check on layer 1 expert 0: the result lands at |w| ~ 0.015, matching the
     unquantised shared expert of the same layer (absmean 0.0149).
@@ -91,22 +121,22 @@ def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
         # byte -> (even, odd) value, then flatten the pair axis back into the row
         values = _pair_lut(weight_packed.device)[weight_packed.long()].reshape(rows, n_in)
 
+        # Checking the scale bytes (a few hundred KB) rather than the dequantised values
+        # (tens of MB) keeps the guard essentially free.
+        zero = torch.zeros((), dtype=torch.float32, device=values.device)
+        unusable = weight_scale >= MAX_SAFE_E8M0
+        multiplier = torch.where(
+            unusable, zero, torch.exp2(weight_scale.to(torch.float32) - 127.0)
+        )
+        if bool(unusable.any()):
+            _note_damaged_groups(int(unusable.sum()), int(unusable.numel()))
+
         if weight_scale.dim() == 2:
             n_groups = weight_scale.shape[1]
             group = n_in // n_groups
-            multiplier = torch.where(
-                weight_scale == 255,
-                torch.zeros((), dtype=torch.float32, device=values.device),
-                torch.exp2(weight_scale.to(torch.float32) - 127.0),
-            )
             # Broadcast over the group instead of expanding it into a full-size tensor
             values = (values.view(rows, n_groups, group) * multiplier.unsqueeze(-1)).view(rows, n_in)
         else:
-            multiplier = torch.where(
-                weight_scale == 255,
-                torch.zeros((), dtype=torch.float32, device=values.device),
-                torch.exp2(weight_scale.to(torch.float32) - 127.0),
-            )
             values = values * multiplier.view(-1, 1)
 
         return values.to(torch.bfloat16)
