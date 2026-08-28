@@ -38,8 +38,30 @@ class ExpertWeightBundle:
         self.down_proj = down_proj
 
 
-# FP4 (E2M1) magnitudes indexed by the low 3 bits of each nibble; bit 3 is the sign.
-FP4_E2M1_MAGNITUDES = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0]
+# FP4 (E2M1) values indexed by the whole nibble: bit 3 is the sign, the low 3 bits pick
+# the magnitude. The reference kernel uses exactly this table.
+FP4_E2M1 = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0,
+            -0.0, -0.5, -1.0, -1.5, -2.0, -3.0, -4.0, -6.0]
+FP4_E2M1_MAGNITUDES = FP4_E2M1[:8]      # kept for callers that want magnitudes only
+
+_PAIR_LUT = None                        # [256, 2] float32: byte -> (even, odd) element
+
+
+def _pair_lut(device):
+    """
+    One lookup per packed byte instead of unpacking each nibble arithmetically.
+
+    Dequantisation was costing as much as the disk read it feeds (9.0 s against 9.1 s
+    for twelve experts). Masking, shifting, widening to int64 and materialising a
+    per-element scale walks ~11M elements a dozen times per tensor; a 256-entry table
+    indexed by the byte turns that into one gather, and the group scale multiplies a
+    [rows, groups, 1] view instead of an expanded copy.
+    """
+    global _PAIR_LUT
+    if _PAIR_LUT is None or _PAIR_LUT.device != device:
+        pairs = [[FP4_E2M1[b & 0x0F], FP4_E2M1[(b >> 4) & 0x0F]] for b in range(256)]
+        _PAIR_LUT = torch.tensor(pairs, dtype=torch.float32, device=device)
+    return _PAIR_LUT
 
 
 def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
@@ -63,27 +85,30 @@ def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
     unquantised shared expert of the same layer (absmean 0.0149).
     """
     if HAS_TORCH and isinstance(weight_packed, torch.Tensor):
-        codes = torch.stack(
-            [weight_packed & 0x0F, (weight_packed >> 4) & 0x0F], dim=-1
-        ).reshape(weight_packed.shape[0], weight_packed.shape[1] * 2).long()
+        rows, pcols = weight_packed.shape
+        n_in = pcols * 2
 
-        lut = torch.tensor(FP4_E2M1_MAGNITUDES, dtype=torch.float32, device=codes.device)
-        values = lut[codes & 0x7]
-        values = torch.where(codes & 0x8 != 0, -values, values)
+        # byte -> (even, odd) value, then flatten the pair axis back into the row
+        values = _pair_lut(weight_packed.device)[weight_packed.long()].reshape(rows, n_in)
 
         if weight_scale.dim() == 2:
-            groups = max(values.shape[1] // weight_scale.shape[1], 1)
-            raw_scale = weight_scale.repeat_interleave(groups, dim=1)[:, :values.shape[1]]
+            n_groups = weight_scale.shape[1]
+            group = n_in // n_groups
+            multiplier = torch.where(
+                weight_scale == 255,
+                torch.zeros((), dtype=torch.float32, device=values.device),
+                torch.exp2(weight_scale.to(torch.float32) - 127.0),
+            )
+            # Broadcast over the group instead of expanding it into a full-size tensor
+            values = (values.view(rows, n_groups, group) * multiplier.unsqueeze(-1)).view(rows, n_in)
         else:
-            raw_scale = weight_scale.view(-1, 1)
+            multiplier = torch.where(
+                weight_scale == 255,
+                torch.zeros((), dtype=torch.float32, device=values.device),
+                torch.exp2(weight_scale.to(torch.float32) - 127.0),
+            )
+            values = values * multiplier.view(-1, 1)
 
-        exponent = raw_scale.to(torch.float32)
-        multiplier = torch.where(
-            raw_scale == 255,
-            torch.zeros((), dtype=torch.float32, device=values.device),
-            torch.exp2(exponent - 127.0),
-        )
-        values = values * multiplier
         return values.to(torch.bfloat16)
 
     if isinstance(weight_packed, np.ndarray):

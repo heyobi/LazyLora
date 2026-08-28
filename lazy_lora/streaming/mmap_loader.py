@@ -142,20 +142,53 @@ class SafetensorsIndex:
 
 class MmapTensorStreamer:
     """
-    High-performance zero-copy tensor loader using memory mapping.
-    Maintains open mmap descriptors and extracts slice views instantly.
+    Tensor loader that pulls byte ranges straight out of the shards with pread.
+
+    The name is historical: this used to slice memory maps, which is the usual advice.
+    On this machine the shards live on a Windows volume reached through WSL's DrvFs, and
+    faulting pages in through that layer costs far more than reading the same bytes:
+    252 MB of expert tensors took 11.58 s by mmap slice (21.8 MB/s) against 2.49 s by
+    pread (101.0 MB/s), a 4.6x difference on identical data. The C reference engine
+    reaches ~69 MB/s on the same drive by reading rather than mapping.
+
+    Descriptors stay open per shard; `_get_mmap` is kept for callers that still want a
+    map, but nothing on the hot path uses it.
     """
 
     def __init__(self, model_dir: str):
         self.model_dir = model_dir
         self.index = SafetensorsIndex(model_dir)
         self._mmap_handles: Dict[str, Tuple[mmap.mmap, int]] = {}  # shard_path -> (mmap_obj, fd)
+        self._fds: Dict[str, int] = {}
         # Running total of tensor bytes pulled off disk, so the dashboard can report the
         # throughput actually achieved instead of an assumed figure.
         self.bytes_read: int = 0
 
+    def _get_fd(self, shard_path: str) -> int:
+        """Open (once) and keep a read descriptor for a shard."""
+        fd = self._fds.get(shard_path)
+        if fd is None:
+            fd = os.open(shard_path, os.O_RDONLY)
+            self._fds[shard_path] = fd
+        return fd
+
+    def _read_range(self, shard_path: str, start: int, end: int) -> bytes:
+        """Read [start, end) from a shard, retrying on short reads."""
+        fd = self._get_fd(shard_path)
+        want = end - start
+        chunks = []
+        got = 0
+        while got < want:
+            chunk = os.pread(fd, want - got, start + got)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            got += len(chunk)
+        self.bytes_read += got
+        return chunks[0] if len(chunks) == 1 else b"".join(chunks)
+
     def _get_mmap(self, shard_path: str) -> mmap.mmap:
-        """Get or create mmap handle for shard."""
+        """Get or create mmap handle for shard (kept for callers that want a map)."""
         if shard_path not in self._mmap_handles:
             fd = os.open(shard_path, os.O_RDONLY)
             mm = mmap.mmap(fd, 0, access=mmap.ACCESS_READ)
@@ -176,11 +209,7 @@ class MmapTensorStreamer:
             return None
 
         shard_path, start, end, shape, dtype_str = self.index.tensor_locations[resolved_name]
-        mm = self._get_mmap(shard_path)
-
-        # Slice raw bytes view without copying entire file
-        raw_bytes = mm[start:end]
-        self.bytes_read += end - start
+        raw_bytes = self._read_range(shard_path, start, end)
 
         np_dtype = DTYPE_MAP_NUMPY.get(dtype_str, np.float32)
         arr = np.frombuffer(raw_bytes, dtype=np_dtype).reshape(shape)
@@ -224,7 +253,6 @@ class MmapTensorStreamer:
 
         np_dtype = np.dtype(DTYPE_MAP_NUMPY.get(dtype_str, np.float32))
         row_bytes = shape[1] * np_dtype.itemsize
-        mm = self._get_mmap(shard_path)
 
         rows = np.asarray(row_indices, dtype=np.int64).reshape(-1)
         out = np.empty((rows.shape[0], shape[1]), dtype=np_dtype)
@@ -233,8 +261,7 @@ class MmapTensorStreamer:
                 out[i] = 0
                 continue
             off = start + int(r) * row_bytes
-            out[i] = np.frombuffer(mm[off:off + row_bytes], dtype=np_dtype)
-            self.bytes_read += row_bytes
+            out[i] = np.frombuffer(self._read_range(shard_path, off, off + row_bytes), dtype=np_dtype)
 
         if as_torch and HAS_TORCH:
             t = torch.from_numpy(out)
@@ -276,10 +303,8 @@ class MmapTensorStreamer:
 
         np_dtype = np.dtype(DTYPE_MAP_NUMPY.get(dtype_str, np.float32))
         row_bytes = shape[1] * np_dtype.itemsize
-        mm = self._get_mmap(shard_path)
         off = start + row_start * row_bytes
-        raw = mm[off:off + (row_end - row_start) * row_bytes]
-        self.bytes_read += (row_end - row_start) * row_bytes
+        raw = self._read_range(shard_path, off, off + (row_end - row_start) * row_bytes)
         arr = np.frombuffer(raw, dtype=np_dtype).reshape(row_end - row_start, shape[1])
 
         if as_torch and HAS_TORCH:
@@ -292,7 +317,7 @@ class MmapTensorStreamer:
         return arr
 
     def close(self) -> None:
-        """Close all open mmap descriptors."""
+        """Close all open descriptors and maps."""
         for shard_path, (mm, fd) in self._mmap_handles.items():
             try:
                 mm.close()
@@ -300,6 +325,12 @@ class MmapTensorStreamer:
             except Exception:
                 pass
         self._mmap_handles.clear()
+        for fd in self._fds.values():
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        self._fds.clear()
 
     def __enter__(self):
         return self
