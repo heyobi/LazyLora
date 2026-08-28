@@ -123,20 +123,29 @@ def kda_attention(
     k = l2_norm(k.view(B, T, H, D).float())
     v = v.view(B, T, H, D).float()
 
-    # Data-dependent per-channel decay: g = -exp(A_log) * softplus(f(h) + dt_bias)
-    g = F.linear(F.linear(h, w.f_a_proj), w.f_b_proj).view(B, T, H, D).float()
-    g = g + w.dt_bias.view(1, 1, H, D).float()
-    g = -torch.exp(w.A_log.float()).view(1, 1, 1, D) * F.softplus(g)
-    if gate_lower_bound is not None:
-        g = g.clamp(min=gate_lower_bound)
+    # Data-dependent decay. A_log is stored with head_dim entries but is indexed PER
+    # HEAD - only the first num_heads of them are nonzero, so indexing it per channel
+    # silently gives most heads a decay of exp(0) = 1 and no forgetting at all.
+    #
+    #   u     = exp(A_log[h]) * (z + dt_bias)
+    #   g     = gate_lower_bound * sigmoid(u)      -> lands in (lower_bound, 0]
+    #   decay = exp(g)
+    #
+    # The bound is built into the sigmoid rather than applied as a clamp afterwards.
+    z = F.linear(F.linear(h, w.f_a_proj), w.f_b_proj).view(B, T, H, D).float()
+    z = z + w.dt_bias.view(1, 1, H, D).float()
+    a = torch.exp(w.A_log.float()[:H]).view(1, 1, H, 1)
+    lb = gate_lower_bound if gate_lower_bound is not None else -5.0
+    g = lb * torch.sigmoid(a * z)
     decay = torch.exp(g)                                     # [B, T, H, D]
 
     beta = torch.sigmoid(F.linear(h, w.b_proj).float())      # [B, T, H]
 
-    # Gated delta rule, one token at a time:
+    # Gated delta rule, one token at a time, with q pre-scaled by d_k^-0.5:
     #   S <- S * diag(decay_t)
     #   S <- S + beta_t * k_t (v_t - S^T k_t)^T
     #   o_t = S^T q_t
+    q = q * (D ** -0.5)
     state = torch.zeros(B, H, D, D, dtype=torch.float32, device=h.device)
     outputs = torch.empty(B, T, H, D, dtype=torch.float32, device=h.device)
     for t in range(T):
