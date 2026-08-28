@@ -1,9 +1,9 @@
 """
-Stress test for ActivationRingBuffer across all 93 layers with real NVMe Write/Read Speed Benchmarks.
+Stress test for ActivationRingBuffer across all 93 layers with real disk Write/Read Speed Benchmarks.
 Verifies:
 1. High-throughput writing and reading of 93-layer boundary activations.
 2. Bit-exact numerical equality of serialized and deserialized activations.
-3. Live measurement of NVMe disk Write Speed (MB/s) and Read Speed (MB/s).
+3. Live measurement of disk Write Speed (MB/s) and Read Speed (MB/s).
 4. Step latency & 1-epoch training time projection.
 """
 

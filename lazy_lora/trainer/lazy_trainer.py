@@ -998,6 +998,7 @@ class LazyLoRATrainer:
         """
         t0 = time.time()
         num_layers = self.config.model.num_hidden_layers
+        bytes_read_start = self.mmap_streamer.bytes_read
 
         # 1. Embed tokens
         if HAS_TORCH:
@@ -1065,7 +1066,7 @@ class LazyLoRATrainer:
             active_layer=num_layers - 1,
             active_experts=last_active_experts,
             tokens_processed=tokens_count,
-            disk_bytes_read=int(num_layers * 18 * 3584 * 7168 * 2),  # Bytes streamed per step
+            disk_bytes_read=self.mmap_streamer.bytes_read - bytes_read_start,
         )
 
         if step % self.config.training.logging_steps == 0:

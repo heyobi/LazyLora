@@ -1,6 +1,6 @@
 """
 Rich Visual Terminal Dashboard for Real-Time Monitoring of LazyLoRA Training.
-Displays live VRAM, RAM, NVMe I/O throughput, active layer & expert indices,
+Displays live VRAM, RAM, disk I/O throughput, active layer & expert indices,
 loss curves, and C: drive safety isolation status.
 """
 
@@ -63,7 +63,7 @@ class TerminalDashboard:
         
         lines.append(f" GPU VRAM (GTX 980 Ti): {m.vram_used_mb:.0f} / {m.vram_total_mb:.0f} MB  {vram_bar} (Peak: {m.vram_peak_mb:.0f} MB)")
         lines.append(f" SYSTEM RAM (WSL/Host): {m.ram_used_gb:.1f} / {m.ram_total_gb:.1f} GB  {ram_bar}")
-        lines.append(f" NVMe I/O (D: Drive)  : {m.disk_read_mbps:.1f} MB/s Streaming Throughput")
+        lines.append(f" Disk I/O (D: HDD)    : {m.disk_read_mbps:.1f} MB/s Streaming Throughput")
         
         # Safety Alert
         c_status = "[LOCKED & PROTECTED]" if m.c_drive_free_gb >= 8.0 else "[WARNING: LOW SPACE]"

@@ -119,7 +119,10 @@ class LazyLoRAOptimizer:
 
             if HAS_TORCH and isinstance(p, torch.Tensor):
                 data = p.data
-                g = grad.data
+                # The moments are kept in float32 even when the parameters are bfloat16:
+                # bfloat16 carries ~3 significant digits, which is not enough to
+                # accumulate a second moment or to make `eps` mean anything.
+                g = grad.data.to(torch.float32)
 
                 # Weight decay
                 if self.weight_decay != 0:
@@ -127,8 +130,8 @@ class LazyLoRAOptimizer:
 
                 # Initialize states
                 if idx not in self.m_states:
-                    self.m_states[idx] = torch.zeros_like(data)
-                    self.v_states[idx] = torch.zeros_like(data)
+                    self.m_states[idx] = torch.zeros(data.shape, dtype=torch.float32, device=data.device)
+                    self.v_states[idx] = torch.zeros(data.shape, dtype=torch.float32, device=data.device)
 
                 m = self.m_states[idx]
                 v = self.v_states[idx]
@@ -143,8 +146,8 @@ class LazyLoRAOptimizer:
                 step_size = current_lr * math.sqrt(bias_correction2) / bias_correction1
 
                 # Update parameter: data -= step_size * m / (sqrt(v) + eps)
-                denom = v.sqrt().add_(self.eps)
-                data.addcdiv_(m, denom, value=-step_size)
+                update = (m / (v.sqrt() + self.eps)).to(data.dtype)
+                data.add_(update, alpha=-step_size)
             else:
                 # NumPy / LoRAParameter implementation
                 data = np.asarray(p.data if hasattr(p, "data") else p, dtype=np.float32)

@@ -69,8 +69,38 @@ class StreamingDatasetIterator:
             self._tokenizer = None
         return self._tokenizer
 
+    def _tokenize_sample(self, sample: Dict[str, Any]) -> List[int]:
+        """
+        Turn one dataset record into Kimi K3 token ids.
+
+        Instruction records go through the model's own chat template, which is a tag
+        format (`<|open|>message role="user"<|sep|> ... <|end_of_msg|>`) and not ChatML,
+        so hand-written `<|im_start|>` prompts would be tokenized as literal text.
+        """
+        tokenizer = self._get_tokenizer()
+        instruction = (sample.get("instruction") or "").strip()
+        user_input = (sample.get("input") or "").strip()
+        output = (sample.get("output") or "").strip()
+
+        if tokenizer is not None and instruction and output:
+            user_content = f"{instruction}\n\n{user_input}".strip() if user_input else instruction
+            messages = [
+                {"role": "user", "content": user_content},
+                {"role": "assistant", "content": output},
+            ]
+            try:
+                ids = tokenizer.apply_chat_template(messages, tokenize=True)
+                return list(ids)[: self.max_seq_len]
+            except Exception:
+                pass
+
+        text = sample.get("formatted_text", "")
+        if not text:
+            text = " ".join(p for p in (instruction, user_input, output) if p)
+        return self._simple_tokenize(text)
+
     def _simple_tokenize(self, text: str) -> List[int]:
-        """Tokenize with the model's own tokenizer, or fall back to raw bytes."""
+        """Tokenize plain text with the model's own tokenizer, or fall back to raw bytes."""
         tokenizer = self._get_tokenizer()
         if tokenizer is not None:
             ids = tokenizer.encode(text)[: self.max_seq_len - 2]
@@ -107,10 +137,7 @@ class StreamingDatasetIterator:
         current_batch_tokens = []
 
         for sample in self.iterate_samples():
-            text = sample.get("formatted_text", "")
-            if not text:
-                text = f"{sample.get('instruction', '')} {sample.get('input', '')} {sample.get('output', '')}"
-            token_ids = self._simple_tokenize(text)
+            token_ids = self._tokenize_sample(sample)
             
             # Truncate / Pad to max_seq_len
             if len(token_ids) > self.max_seq_len:

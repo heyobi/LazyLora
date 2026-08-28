@@ -150,6 +150,9 @@ class MmapTensorStreamer:
         self.model_dir = model_dir
         self.index = SafetensorsIndex(model_dir)
         self._mmap_handles: Dict[str, Tuple[mmap.mmap, int]] = {}  # shard_path -> (mmap_obj, fd)
+        # Running total of tensor bytes pulled off disk, so the dashboard can report the
+        # throughput actually achieved instead of an assumed figure.
+        self.bytes_read: int = 0
 
     def _get_mmap(self, shard_path: str) -> mmap.mmap:
         """Get or create mmap handle for shard."""
@@ -177,6 +180,7 @@ class MmapTensorStreamer:
 
         # Slice raw bytes view without copying entire file
         raw_bytes = mm[start:end]
+        self.bytes_read += end - start
 
         np_dtype = DTYPE_MAP_NUMPY.get(dtype_str, np.float32)
         arr = np.frombuffer(raw_bytes, dtype=np_dtype).reshape(shape)
@@ -230,6 +234,7 @@ class MmapTensorStreamer:
                 continue
             off = start + int(r) * row_bytes
             out[i] = np.frombuffer(mm[off:off + row_bytes], dtype=np_dtype)
+            self.bytes_read += row_bytes
 
         if as_torch and HAS_TORCH:
             t = torch.from_numpy(out)
@@ -274,6 +279,7 @@ class MmapTensorStreamer:
         mm = self._get_mmap(shard_path)
         off = start + row_start * row_bytes
         raw = mm[off:off + (row_end - row_start) * row_bytes]
+        self.bytes_read += (row_end - row_start) * row_bytes
         arr = np.frombuffer(raw, dtype=np_dtype).reshape(row_end - row_start, shape[1])
 
         if as_torch and HAS_TORCH:

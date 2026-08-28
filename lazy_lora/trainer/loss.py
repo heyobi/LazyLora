@@ -32,7 +32,10 @@ def compute_cross_entropy_loss(
         grad_logits: [N, vocab_size] gradient tensor (if requested or in autograd)
     """
     if HAS_TORCH and isinstance(logits, torch.Tensor):
-        logits_flat = logits.view(-1, logits.size(-1))
+        # Softmax over a 163840-way vocabulary in bfloat16 loses several digits, and the
+        # loss is the number this engine is judged by, so the reduction runs in float32.
+        orig_dtype = logits.dtype
+        logits_flat = logits.reshape(-1, logits.size(-1)).to(torch.float32)
         targets_t = targets if isinstance(targets, torch.Tensor) else torch.as_tensor(targets, dtype=torch.long, device=logits.device)
         targets_flat = targets_t.view(-1)
         valid_mask = targets_flat != ignore_index
@@ -51,7 +54,7 @@ def compute_cross_entropy_loss(
             grad_logits = grad_logits / max(1, num_valid)
         else:
             grad_logits.zero_()
-        return loss, grad_logits.view_as(logits)
+        return loss, grad_logits.view_as(logits).to(orig_dtype)
     else:
         logits_flat = logits.reshape(-1, logits.shape[-1])
         targets_flat = targets.reshape(-1)

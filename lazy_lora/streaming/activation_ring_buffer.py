@@ -63,7 +63,13 @@ class ActivationRingBuffer:
                 dtype_code = 3
         else:
             arr = np.ascontiguousarray(activation)
-            dtype_code = 3 if arr.dtype == np.float32 else 2
+            if arr.dtype == np.float16:
+                dtype_code = 2
+            else:
+                # Anything else (float64 included) is stored as float32; labelling a
+                # float64 array as float16 would read back as garbage.
+                arr = arr.astype(np.float32, copy=False)
+                dtype_code = 3
 
         self._layer_shapes[layer_idx] = arr.shape
         self._layer_dtypes[layer_idx] = dtype_code

@@ -53,20 +53,17 @@ class TurkishDatasetManager:
     @staticmethod
     def format_kimi_prompt(instruction: str, user_input: str = "", response: str = "") -> str:
         """
-        Format prompt using Kimi Chat template.
+        Plain-text rendering of one sample.
+
+        Kimi K3 does not use ChatML: its chat format is a tag syntax built from its own
+        control tokens (`<|open|>message role="user"<|sep|> ... <|end_of_msg|>`). Writing
+        `<|im_start|>` markers here would feed the model literal text it has never seen in
+        that arrangement, so the real template is applied at tokenization time through the
+        tokenizer's `apply_chat_template`, and this field stays plain text for readability
+        and for the byte-level fallback path.
         """
-        system_msg = "Sen Kimi K3, Moonshot AI tarafından geliştirilmiş ve Türkçe dil becerileri LoRA ile optimize edilmiş son derece yetenekli bir yapay zeka asistanısın."
-        
         user_content = f"{instruction}\n\n{user_input}".strip() if user_input else instruction.strip()
-        
-        prompt = (
-            f"<|im_start|>system\n{system_msg}<|im_end|>\n"
-            f"<|im_start|>user\n{user_content}<|im_end|>\n"
-            f"<|im_start|>assistant\n"
-        )
-        if response:
-            prompt += f"{response}<|im_end|>\n"
-        return prompt
+        return f"{user_content}\n\n{response}".strip() if response else user_content
 
     def generate_seed_dataset(self, target_samples: int = 100) -> str:
         """

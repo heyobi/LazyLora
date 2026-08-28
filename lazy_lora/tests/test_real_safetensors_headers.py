@@ -1,9 +1,9 @@
 """
-Tests real downloaded Kimi K3 safetensors shards on D: drive and benchmarks NVMe read throughput.
+Tests real downloaded Kimi K3 safetensors shards on D: drive and benchmarks disk read throughput.
 Verifies:
 1. Safetensors 8-byte header size unpack and JSON indexing.
 2. Zero-copy mmap tensor extraction from real downloaded shards.
-3. Live NVMe Disk Read Throughput (MB/s) and latency per tensor lookup.
+3. Live Disk Read Throughput (MB/s) and latency per tensor lookup.
 """
 
 import os
@@ -36,7 +36,7 @@ class TestRealKimiK3Shards(unittest.TestCase):
         print(f" 💾 REAL KIMI K3 SHARDS DISK I/O & READ SPEED BENCHMARK")
         print(f"=" * 70)
         print(f"  - Downloaded Shards Count : {len(shard_files)} shards")
-        print(f"  - Total Downloaded Size   : {total_shard_gb:.2f} GB on D: NVMe SSD")
+        print(f"  - Total Downloaded Size   : {total_shard_gb:.2f} GB on D: drive")
 
         # 1. Indexing Benchmark
         t0_idx = time.perf_counter()
@@ -71,7 +71,7 @@ class TestRealKimiK3Shards(unittest.TestCase):
         print(f"  - Tested Tensors Sample   : {benchmark_sample_count} real tensors")
         print(f"  - Data Sliced & Read      : {mb_read:.2f} MB")
         print(f"  - Time Elapsed            : {t_read * 1000:.2f} ms")
-        print(f"  - NVMe Read Throughput    : {throughput_mb_s:,.1f} MB/s ({throughput_mb_s / 1024:.2f} GB/s)")
+        print(f"  - Disk Read Throughput    : {throughput_mb_s:,.1f} MB/s ({throughput_mb_s / 1024:.2f} GB/s)")
         print(f"  - Average Tensor Latency  : {avg_latency_ms:.3f} ms per tensor lookup")
         print(f"=" * 70)
 
