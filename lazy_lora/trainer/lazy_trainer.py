@@ -640,12 +640,13 @@ class LazyLoRATrainer:
             # Run routed experts in latent space (3584 → 3072 → 3584)
             routed_latent_out = torch.zeros(h_latent.shape[0], d_l, dtype=h_latent.dtype, device=self.device)
 
-            for exp_id in active_experts:
+            # Stream the experts with a background reader keeping the disk busy while the
+            # current expert is being multiplied.
+            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
                 mask = (topk_indices == exp_id)  # [N, top_k]
                 if not mask.any():
                     continue
 
-                e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
                 e_gate = F.linear(h_latent, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)   # [N, 3072]
                 e_up = F.linear(h_latent, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_latent)        # [N, 3072]
                 e_situ = situ_glu_forward(e_gate, e_up)
@@ -682,11 +683,10 @@ class LazyLoRATrainer:
             h_latent = np.matmul(h_flat, latent_down_w.T)
 
             routed_latent_out = np.zeros((h_latent.shape[0], d_l), dtype=np.float32)
-            for exp_id in active_experts:
+            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
                 mask = (topk_indices == exp_id)
                 if not np.any(mask):
                     continue
-                e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
                 e_gate = np.matmul(h_latent, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_latent)
                 e_up = np.matmul(h_latent, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_latent)
                 e_situ = situ_glu_forward(e_gate, e_up)
@@ -843,11 +843,10 @@ class LazyLoRATrainer:
             grad_latent_out = F.linear(grad_flat, latent_up_w.t())           # [N, 3584]
             grad_latent_in = torch.zeros_like(h_latent)
 
-            for exp_id in active_experts:
+            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
                 mask = (topk_indices == exp_id)
                 if not mask.any():
                     continue
-                e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
                 gate = F.linear(h_latent, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)
                 up = F.linear(h_latent, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_latent)
                 situ = situ_glu_forward(gate, up)
@@ -928,11 +927,10 @@ class LazyLoRATrainer:
             grad_latent_out = np.matmul(grad_flat, latent_up_w)
             grad_latent_in = np.zeros_like(h_latent)
 
-            for exp_id in active_experts:
+            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
                 mask = (topk_indices == exp_id)
                 if not np.any(mask):
                     continue
-                e_bundle = self.expert_streamer.get_expert(layer_idx, exp_id, is_shared=False)
                 gate = np.matmul(h_latent, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_latent)
                 up = np.matmul(h_latent, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_latent)
                 situ = situ_glu_forward(gate, up)

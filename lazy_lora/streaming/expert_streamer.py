@@ -219,8 +219,69 @@ class DynamicExpertStreamer:
         return sorted(expert_ids, key=key)
 
     def request_prefetch_layer(self, layer_idx: int, active_experts: List[int], include_shared: bool = True) -> None:
-        """No-op in zero-cache mode to prevent RAM bloat."""
+        """
+        Kept for compatibility. Prefetching across layers cannot work: routing is data
+        dependent, so the next layer's expert set is unknown until its router has run.
+        Use stream_experts, which prefetches WITHIN a layer, where the whole list is
+        known up front.
+        """
         pass
+
+    def stream_experts(self, layer_idx: int, expert_ids: List[int], depth: int = 2):
+        """
+        Yield (expert_id, bundle) while a background thread reads ahead.
+
+        Measured on this machine the disk sits idle for most of a layer: each expert is
+        six small reads followed by MXFP4 decoding and GEMMs on the CPU, and neither side
+        overlaps the other. Reading ahead by `depth` experts keeps the drive moving while
+        the current expert is being multiplied. The ids are expected in on-disk order
+        (see sort_by_disk_order), so the read-ahead stays a forward sweep.
+
+        Only `depth` bundles are resident beyond the one in use, which bounds the extra
+        RAM at roughly depth * 17.5 MB for Kimi K3's experts.
+        """
+        if not expert_ids:
+            return
+
+        if not self.async_prefetch or len(expert_ids) < 2:
+            for exp_id in expert_ids:
+                yield exp_id, self._load_single_expert(layer_idx, exp_id, False)
+            return
+
+        queue_out: "queue.Queue" = queue.Queue(maxsize=max(1, depth))
+        stop = threading.Event()
+
+        def reader():
+            try:
+                for exp_id in expert_ids:
+                    if stop.is_set():
+                        break
+                    bundle = self._load_single_expert(layer_idx, exp_id, False)
+                    while not stop.is_set():
+                        try:
+                            queue_out.put((exp_id, bundle), timeout=0.5)
+                            break
+                        except queue.Full:
+                            continue
+            except Exception as exc:                      # surfaced on the consumer side
+                queue_out.put(("__error__", exc))
+            finally:
+                queue_out.put((None, None))
+
+        worker = threading.Thread(target=reader, daemon=True)
+        worker.start()
+
+        try:
+            while True:
+                exp_id, bundle = queue_out.get()
+                if exp_id is None:
+                    break
+                if exp_id == "__error__":
+                    raise bundle
+                yield exp_id, bundle
+        finally:
+            stop.set()
+            worker.join(timeout=2.0)
 
     def get_expert(self, layer_idx: int, expert_idx: int, is_shared: bool = False) -> ExpertWeightBundle:
         """Fetch expert bundle on-demand from zero-copy mmap."""
