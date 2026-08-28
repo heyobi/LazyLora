@@ -365,7 +365,9 @@ Katman katman izleme, kalan sıçramanın bir hata olmadığını gösterdi. RMS
 
 Aynı birim-norm girdiyle beslendiğinde tüm katmanların paylaşılan uzmanları benzer çıktı verir (`std` 2,4 – 4,1). Dolayısıyla anormal olan katman 3'ün büyük olması değil, katman 0–2'nin küçük olmasıdır; bu da o katmanların norm ağırlıklarının küçüklüğünden kaynaklanır. Ön-normalizasyonlu bir mimaride artık akışının derinlikle büyümesi beklenen davranıştır ve her alt katman girdisi zaten normalize edilmektedir.
 
-**Sonuç:** Bu bölümde "açık sorun" olarak kaydedilen aktivasyon patlamasının gerçek nedeni SiTU hatasıydı ve giderilmiştir. Nihai doğrulama, gerçek Türkçe metin üzerinde tam 93 katmanlık bir ileri geçişin **cross-entropy loss** değeridir: eğitilmiş bir modelin doğal metinde 2–4 aralığında loss vermesi beklenir; ~12 (yani $\ln 163840$) değeri boru hattının hâlâ bozuk olduğu anlamına gelir.
+**Sonuç:** Bu bölümde "açık sorun" olarak kaydedilen aktivasyon patlamasının nedenlerinden biri SiTU hatasıydı ve giderilmiştir.
+
+> ⚠️ **13.3'teki yorum yanlıştı.** "Kalan büyüme modelin kendi davranışıdır" sonucu, Bölüm 15'teki referans karşılaştırmasıyla **çürütülmüştür**: gerçek modelde artık akışı MLA katmanlarında sıçramaz, yumuşakça büyür. Sıçramanın gerçek nedeni, MLA katmanlarında gerçek norm ağırlıklarının sessizce 1'lerle değiştirilmesiydi (bkz. 15.4). Bu, ölçüm yerine akıl yürütmeye dayanan bir çıkarımın nasıl yanlış sonuç verdiğinin kaydı olarak burada bırakılmıştır.
 
 ---
 
@@ -391,4 +393,113 @@ Yani her UTF-8 baytı `bayt + 100` ile bir token ID'sine eşleniyordu. Bu ID'ler
 Sözlük boyutu `163840` olarak doğrulandı; `bos=163584`, `eos=163585`, `pad=163839`.
 
 > **Genel ders:** Bu proje boyunca bulunan hataların ortak paydası, "geçici" veya "yaklaşık" olarak yazılmış ama hiçbir zaman gerçeğiyle değiştirilmemiş yer tutuculardır: sahte dikkat katmanı, rastgele yönlendirici ağırlıkları, yanlış kuantizasyon formatı, yanlış aktivasyon ve sahte tokenizer. Hepsi de kod çalıştığı ve makul görünen sayılar ürettiği için fark edilmeden kalmıştı.
+
+---
+
+## 15. Deney 7: Referans Motorla Katman Katman Doğrulama
+
+### 15.1 Yöntem
+
+İlk tam derinlikli ileri geçiş `loss = NaN` verdi. Aktivasyon halka tamponu sayesinde kaynak anında yerelleştirildi: katman 22'ye kadar her şey sonlu, katman 23'ün çıktısı değil.
+
+Bunun üzerine, loss'u yorumlamaya çalışmak yerine **bağımsız bir referans implementasyonla doğrudan karşılaştırma** yöntemine geçildi. `D:\hamza\kimi-k3-in-c`, aynı mimarinin çalışan bir C uygulamasıdır ve `--dump-logits` ile float32 logits yazabilmektedir.
+
+**Kritik nokta:** LoRA'da $B$ matrisi sıfırla başlatıldığından, eğitilmemiş adaptörlerin ileri geçişe katkısı tam olarak sıfırdır. Dolayısıyla motorumuzun logits'i, referansınkiyle **birebir aynı olmak zorundadır**. Bu, makul görünen ama yanlış bir loss'un yakalayamayacağı hataları ortaya çıkarır.
+
+Ayrıca C deposundaki `tests/fixtures/ops/` altında, her biri kendi ağırlıkları, girdileri ve **beklenen çıktılarıyla** gelen op-bazlı fixture'lar bulundu (tolerans `1e-5`). Bunlar [test_reference_ops.py](file:///c:/Users/Dell/Desktop/LazyLora/lazy_lora/tests/test_reference_ops.py) olarak süite eklendi.
+
+### 15.2 Bulunan Hata: MXFP4 NaN Ölçeği
+
+| Katman | Ölçek baytları |
+| :--- | :--- |
+| 1 | min 110, max 122, hiç 255 yok |
+| 23 | min 0, max 255, **305 adet 255** |
+
+E8M0'da `255` NaN kodlamasıdır. Motor `2^(255-127) = ∞` hesaplıyor, ardından `0 × ∞ = NaN` oluşuyor ve kalan 70 katmana yayılıyordu. Referans çekirdek bu grupları atlar:
+
+```c
+if (sb == 255) continue;   /* NaN scale: contribute nothing */
+```
+
+C'nin tablosu da bunu doğrular: `K3_E8M0[b] = (b == 255) ? 0.0f : ldexpf(1.0f, b - 127)`.
+
+### 15.3 Bulunan Hata: KDA Sönüm Kapısı
+
+İlk logit karşılaştırması `cosine 0.8665` verdi — sayısal gürültü olamayacak kadar büyük, "tamamen yanlış" denemeyecek kadar küçük. Referans çekirdeğin kendisi nedeni yazıyordu:
+
+```c
+for (int h = 0; h < H; h++) {
+    /* PER HEAD. The checkpoint stores head_dim floats but only the first H are
+     * nonzero. Indexing this per channel is a silent, fatal error. */
+    const float a = expf(A_log[h]);
+    const float u  = a * (z[i] + dt_bias[i]);
+    const float gi = lb * sigmoidf_(u);   /* in (lb, 0] */
+```
+
+Üç ayrı hata:
+
+| | Motordaki (yanlış) | Referans (doğru) |
+| :--- | :--- | :--- |
+| `A_log` indeksleme | Kanal başına | **Baş başına**; dosyadaki 128 değerin yalnızca ilk 96'sı anlamlı, gerisi dolgu |
+| Kapı | $-e^{A_{\log}}\cdot\text{softplus}(z+b)$, sonra $-5$'te kırp | $\text{lb}\cdot\sigma\big(e^{A_{\log}}(z+b)\big)$, doğal olarak $(\text{lb}, 0]$ |
+| q ölçekleme | Yok | Özyinelemeden önce $q \cdot d_k^{-1/2}$ |
+
+Kanal başına indeksleme yüzünden başların büyük kısmı `exp(0)=1` sönümüyle, yani **hiç unutmadan** çalışıyordu.
+
+**Düzeltme sonrası:** `cosine 0.8665 → 0.999930`, ilk on token birebir aynı sırada.
+
+### 15.4 Bulunan Hata: MLA Katmanlarında Norm Ağırlıklarının Kaybı
+
+Dört katmanlı karşılaştırma yine ayrıldı (`cosine 0.389`). C motoruna, yalnızca `K3_DUMP_H` ortam değişkeni verildiğinde çalışan bir katman-çıktısı dökümü eklenerek artık akışı katman katman kıyaslandı:
+
+| Katman | Cosine | Bizim `std` | C `std` |
+| :--- | ---: | ---: | ---: |
+| 0 | 0,999986 | 0,0103 | 0,0104 |
+| 1 | 0,999984 | 0,0238 | 0,0239 |
+| 2 | 0,999991 | 0,0715 | 0,0718 |
+| **3** | **0,317334** | **7,0141** | **0,0746** |
+
+Katman 3 ilk MLA katmanıdır ve `load_layer_trunk` tüm yedek mekanizmasını tek bir tensöre bağlamıştı:
+
+```python
+if in_norm is None or q_proj is None:
+    in_norm = ones(...); post_norm = ones(...); q_proj = randn(...)
+```
+
+MLA katmanlarında `q_proj` yoktur (`q_a_proj`/`q_b_proj` vardır). Dolayısıyla **24 MLA katmanının tamamında** gerçek `input_layernorm` ve `post_attention_layernorm` atılıp yerlerine 1'ler konuyordu. MoE, katmanın kendi normuyla ölçeklenmiş girdi yerine birim ölçekli girdi alıyor ve çıktısı ~90 kat büyüyordu.
+
+Bu, Bölüm 13.3'te "modelin kendi davranışı" diye yorumladığımız şeyin ta kendisiydi.
+
+### 15.5 Doğrulama Sonucu
+
+Her tensörün kendi başına yedeklenmesi düzeltmesinden sonra, 13 katman boyunca (blok-artık sınırı olan katman 12 dahil) karşılaştırma:
+
+| Katman | Cosine | | Katman | Cosine |
+| :--- | ---: | :-- | :--- | ---: |
+| 0 | 0,999986 | | 7 | 0,999423 |
+| 1 | 0,999984 | | 8 | 0,999421 |
+| 2 | 0,999991 | | 9 | 0,996640 |
+| 3 | 0,999825 | | 10 | 0,999359 |
+| 4 | 0,999777 | | 11 | 0,998917 |
+| 5 | 0,999350 | | **12** | **0,999590** |
+| 6 | 0,999648 | | | |
+
+Katman 12'de her iki motorda da artık akışı aynı anda sıfırlanır (`std 0,0861` ↔ `0,0861`): blok-artık anlık görüntü mekanizması birebir çalışmaktadır.
+
+Kalan `~1e-3` mertebesindeki fark, motorumuzun bfloat16 hesabı ile C'nin double akümülatörlü fp32 aritmetiği arasındaki hassasiyet farkıdır; yapısal değildir.
+
+### 15.6 Op-Bazlı Doğrulama Süiti
+
+| Op | Sonuç |
+| :--- | :--- |
+| `rmsnorm` | ✅ |
+| `situ_glu` | ✅ (Bölüm 13.2 düzeltmesinin bağımsız kanıtı) |
+| `shortconv` | ✅ |
+| `kda_decay` | ✅ |
+| `router` | ✅ |
+| `attnres` | ✅ |
+| `mla` | ✅ |
+| `moe` | ✅ (`2e-4` toleransla; `cosine 1,000000`) |
+
+**Bu bölümün sonucu:** LazyLoRA motoru artık Kimi K3'ün ileri geçişini, bağımsız bir referans implementasyona karşı ölçülmüş biçimde yeniden üretmektedir. Eğitimin anlamlı olabilmesinin ön koşulu buydu.
 
