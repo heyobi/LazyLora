@@ -29,18 +29,53 @@ class StreamingDatasetIterator:
         pad_token_id: int = 163839,
         eos_token_id: int = 163586,
         bos_token_id: int = 163584,
+        tokenizer_dir: Optional[str] = None,
     ):
         self.jsonl_path = jsonl_path
         self.max_seq_len = max_seq_len
         self.pad_token_id = pad_token_id
         self.eos_token_id = eos_token_id
         self.bos_token_id = bos_token_id
+        self.tokenizer_dir = tokenizer_dir
+        self._tokenizer = None
+        self._tokenizer_loaded = False
+
+    def _get_tokenizer(self):
+        """
+        Load Kimi K3's own tiktoken-based tokenizer.
+
+        Without it the token ids mean nothing to the model: the byte fallback below maps
+        each UTF-8 byte to `byte + 100`, which has no relation to the 163840-entry
+        vocabulary, so any loss computed from it is meaningless.
+        """
+        if self._tokenizer_loaded:
+            return self._tokenizer
+
+        self._tokenizer_loaded = True
+        if not self.tokenizer_dir or not os.path.isdir(self.tokenizer_dir):
+            return None
+
+        try:
+            import sys
+            if self.tokenizer_dir not in sys.path:
+                sys.path.insert(0, self.tokenizer_dir)
+            from transformers import AutoTokenizer
+            self._tokenizer = AutoTokenizer.from_pretrained(
+                self.tokenizer_dir, trust_remote_code=True
+            )
+        except Exception as exc:
+            print(f"[!] Kimi K3 tokenizer could not be loaded ({type(exc).__name__}: {exc});"
+                  f" falling back to byte ids, which makes the loss meaningless.")
+            self._tokenizer = None
+        return self._tokenizer
 
     def _simple_tokenize(self, text: str) -> List[int]:
-        """
-        Lightweight deterministic fallback tokenizer (UTF-8 bytes to token IDs)
-        when external HuggingFace tokenizer is unavailable.
-        """
+        """Tokenize with the model's own tokenizer, or fall back to raw bytes."""
+        tokenizer = self._get_tokenizer()
+        if tokenizer is not None:
+            ids = tokenizer.encode(text)[: self.max_seq_len - 2]
+            return [self.bos_token_id] + list(ids) + [self.eos_token_id]
+
         tokens = [self.bos_token_id]
         byte_tokens = [int(b) + 100 for b in text.encode("utf-8")[: self.max_seq_len - 2]]
         tokens.extend(byte_tokens)

@@ -367,3 +367,28 @@ Aynı birim-norm girdiyle beslendiğinde tüm katmanların paylaşılan uzmanlar
 
 **Sonuç:** Bu bölümde "açık sorun" olarak kaydedilen aktivasyon patlamasının gerçek nedeni SiTU hatasıydı ve giderilmiştir. Nihai doğrulama, gerçek Türkçe metin üzerinde tam 93 katmanlık bir ileri geçişin **cross-entropy loss** değeridir: eğitilmiş bir modelin doğal metinde 2–4 aralığında loss vermesi beklenir; ~12 (yani $\ln 163840$) değeri boru hattının hâlâ bozuk olduğu anlamına gelir.
 
+---
+
+## 14. Tokenizasyon Sahteymiş: Loss Ölçümünü Geçersiz Kılan Hata
+
+Doğrulama koşusu başlatılmadan önce veri hattı denetlendi ve ölçümü baştan anlamsız kılacak bir hata bulundu. `stream_dataset.py` şu "geçici" tokenizer'ı kullanıyordu:
+
+```python
+byte_tokens = [int(b) + 100 for b in text.encode("utf-8")]
+```
+
+Yani her UTF-8 baytı `bayt + 100` ile bir token ID'sine eşleniyordu. Bu ID'lerin K3'ün **163.840 girdilik sözlüğüyle hiçbir ilgisi yoktur**. Kodda "HuggingFace tokenizer bulunamazsa" diye tanımlanmış olmasına rağmen gerçek tokenizer'ı deneyen hiçbir yol yoktu; her zaman bu kullanılıyordu.
+
+**Etkisi:** Modele anlamsız token dizileri verildiği için, boru hattı ne kadar doğru olursa olsun loss $\approx \ln(163840) \approx 12$ çıkardı. Gece boyu sürecek doğrulama koşusu hiçbir şey kanıtlamayacaktı.
+
+**Düzeltme:** Model dizinindeki gerçek tokenizer bağlandı (`tiktoken.model` + `tokenization_kimi.py`, `TikTokenTokenizer`). Doğrulama:
+
+| Metin | Token sayısı | Çözülmüş hali |
+| :--- | ---: | :--- |
+| `Merhaba dünya, bugün hava çok güzel.` | 15 | ✅ birebir aynı |
+| `Türkiye'nin başkenti Ankara'dır.` | 14 | ✅ birebir aynı |
+
+Sözlük boyutu `163840` olarak doğrulandı; `bos=163584`, `eos=163585`, `pad=163839`.
+
+> **Genel ders:** Bu proje boyunca bulunan hataların ortak paydası, "geçici" veya "yaklaşık" olarak yazılmış ama hiçbir zaman gerçeğiyle değiştirilmemiş yer tutuculardır: sahte dikkat katmanı, rastgele yönlendirici ağırlıkları, yanlış kuantizasyon formatı, yanlış aktivasyon ve sahte tokenizer. Hepsi de kod çalıştığı ve makul görünen sayılar ürettiği için fark edilmeden kalmıştı.
+

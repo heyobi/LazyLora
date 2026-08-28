@@ -967,6 +967,26 @@ class LazyLoRATrainer:
 
         return grad_h_in
 
+    def _report_forward_loss(self, step: int, loss_val) -> None:
+        """Print and persist the forward loss as soon as it is computed."""
+        try:
+            value = float(loss_val.item() if (HAS_TORCH and isinstance(loss_val, torch.Tensor)) else loss_val)
+        except Exception:
+            return
+
+        import math as _math
+        perplexity = _math.exp(value) if value < 20 else float("inf")
+        print(f"\r  📉 [FORWARD LOSS] step {step}: {value:.4f}  (perplexity {perplexity:.1f})",
+              flush=True)
+
+        path = os.path.join(self.config.paths.workspace_dir, "forward_loss.jsonl")
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(f'{{"step": {step}, "loss": {value:.6f}, "perplexity": {perplexity:.4f}, '
+                        f'"time": {time.time():.0f}}}\n')
+        except Exception:
+            pass
+
     def train_step(
         self,
         step: int,
@@ -1005,16 +1025,22 @@ class LazyLoRATrainer:
                 ignore_index=self.config.model.pad_token_id,
             )
 
-            # 4. Out-of-Core Real Reverse Backward Pass (Layer L-1 -> Layer 0)
-            # Backprop through LM head projection (streamed band by band)
-            grad_h = self._lm_head_backward(grad_logits)
+            # Record the forward loss the moment it exists. It is the one number that says
+            # whether the pipeline reproduces the model, and the backward pass that follows
+            # takes hours - losing it to a crash there would waste the whole run.
+            self._report_forward_loss(step, loss_val)
 
-            # Sequential reverse backward pass through all 93 layers reading activations from D: SSD
-            for l in range(num_layers - 1, -1, -1):
-                if l % 5 == 0 or l == 0:
-                    print(f"\r  ⚡ [BACKWARD PASS] Layer {l+1:02d}/{num_layers} (Grad Stream)", end="", flush=True)
-                grad_h = self.backward_layer(l, grad_h)
-            print("\r" + " " * 80 + "\r", end="", flush=True)
+            if not getattr(self, "forward_only", False):
+                # 4. Out-of-Core Real Reverse Backward Pass (Layer L-1 -> Layer 0)
+                # Backprop through LM head projection (streamed band by band)
+                grad_h = self._lm_head_backward(grad_logits)
+
+                # Sequential reverse backward pass through all 93 layers reading activations from D: SSD
+                for l in range(num_layers - 1, -1, -1):
+                    if l % 5 == 0 or l == 0:
+                        print(f"\r  ⚡ [BACKWARD PASS] Layer {l+1:02d}/{num_layers} (Grad Stream)", end="", flush=True)
+                    grad_h = self.backward_layer(l, grad_h)
+                print("\r" + " " * 80 + "\r", end="", flush=True)
 
         finally:
             if HAS_TORCH:
@@ -1094,6 +1120,7 @@ class LazyLoRATrainer:
             pad_token_id=self.config.model.pad_token_id,
             eos_token_id=self.config.model.eos_token_id,
             bos_token_id=self.config.model.bos_token_id,
+            tokenizer_dir=self.config.paths.base_model_dir,
         )
 
         print("=" * 82)
@@ -1137,6 +1164,10 @@ def main():
     parser.add_argument("--steps", type=int, default=50, help="Number of training steps")
     parser.add_argument("--device", default=None, help="Device override (cuda:0 / cpu)")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--seq-len", type=int, default=None,
+                        help="Sequence length (shorter runs cost proportionally less disk time)")
+    parser.add_argument("--forward-only", action="store_true",
+                        help="Run the forward pass and report the loss, without backward or optimizer")
     args = parser.parse_args()
 
     cfg = get_default_config()
@@ -1146,8 +1177,11 @@ def main():
         cfg.training.learning_rate = args.lr
     if args.device:
         cfg.streaming.device = args.device
+    if args.seq_len:
+        cfg.training.max_seq_len = args.seq_len
 
     trainer = LazyLoRATrainer(config=cfg)
+    trainer.forward_only = args.forward_only
     trainer.train(num_steps=args.steps)
 
 

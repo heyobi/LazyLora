@@ -13,6 +13,8 @@ Bu belge, **Kimi K3 (2.78 Trilyon Parametreli MoE)** ve **LazyLoRA Out-of-Core M
 5. [Fikir 5: Eşzamanlı Asenkron Hibrit Ağaç Spekülasyonu (22x Sohbet Hızlandırma)](#5-fikir-eşzamanlı-asenkron-hibrit-ağaç-spekülasyonu-22x-hızlandırma)
 6. [Fikir 6: Eğitim Sonrası Kalıcı Ağırlık Kaynağı (Weight Merging / Zero-Overhead)](#6-fikir-eğitim-sonrası-kalıcı-ağırlık-kaynağı-weight-merging)
 7. [Fikir 7: Döngüsel ReLoRA ile "Hileli Tam Parametreli Eğitim" (Iterative ReLoRA)](#7-fikir-döngüsel-relora-ile-hileli-tam-parametreli-eğitim)
+8. [Fikir 8: Uzman Akışını Sıralı Taramaya Çevirme (Asenkron Çift Tamponlama)](#8-fikir-uzman-akışını-sıralı-taramaya-çevirme-asenkron-çift-tamponlama)
+9. [Fikir 9: Temel Ağırlık Okumadan LoRA Gradyanı (Geri Geçişi Bedavaya Getirme)](#9-fikir-temel-ağırlık-okumadan-lora-gradyanı-geri-geçişi-bedavaya-getirme)
 
 ---
 
@@ -92,6 +94,35 @@ Bu belge, **Kimi K3 (2.78 Trilyon Parametreli MoE)** ve **LazyLoRA Out-of-Core M
 * **Kritik Sonuç:**
   * LoRA boyutu her döngüde sıfırlandığı için **hiçbir zaman 250 MB'ı aşmaz.**
   * Ana model ağırlıkları ise çok boyutlu **tam dereceli (Full-Rank)** değişime uğrar. 40 TB disk harcamadan, tam eğitimin tüm gücü elde edilmiş olur.
+
+---
+
+## 8. Fikir: Uzman Akışını Sıralı Taramaya Çevirme (Asenkron Çift Tamponlama)
+
+* **Temel Gözlem (Deney 6'dan):** Gerçek yönlendirici ağırlıkları devreye girdiğinde bir katmanda **592/896 uzman** okunuyor. Yani "sadece 16 uzman okunur" avantajı **token başına** geçerli; 127 tokenlik bir batch'te uzmanların üçte ikisine, 512 tokenlik bir batch'te pratikte tamamına dokunuluyor.
+* **Bundan Çıkan Sonuç:** Madem neredeyse tüm uzmanlar okunuyor, bu bir **rastgele erişim değil, sıralı tarama** olmalıdır. Ölçülen `~30 MB/sn`, diskin sıralı hızının (`~150 MB/sn`) beşte biridir.
+* **Darboğazın Mekaniği:** Her uzman için 6 ayrı `mmap` okuması yapılıyor (`w1/w2/w3` × `packed/scale`), aralarda CPU'da MXFP4 çözülüyor ve SiTU hesaplanıyor. Disk, CPU çalışırken **boş bekliyor**; CPU da disk okurken boş bekliyor.
+* **Çözüm:** `expert_streamer.request_prefetch_layer` şu an boş bir `no-op`. Arka planda çalışan bir okuyucu iş parçacığı + çift tamponlama ile, GPU/CPU $E_i$ uzmanını hesaplarken disk $E_{i+1}$'i okur.
+  * Uzmanlar zaten **disk ofsetine göre sıralı** isteniyor (bkz. `sort_by_disk_order`), dolayısıyla ön-getirme kafa hareketi eklemez.
+  * **Beklenen kazanç: 3–5 kat**, hem ileri hem geri geçişte.
+* **Genişletme:** Aynı boru hattı, uzmanları okurken MXFP4 çözümünü ayrı bir iş parçacığında yapabilir (üç aşamalı pipeline: oku → çöz → hesapla).
+
+---
+
+## 9. Fikir: Temel Ağırlık Okumadan LoRA Gradyanı (Geri Geçişi Bedavaya Getirme)
+
+* **Temel Soru:** Geri geçiş, LoRA gradyanlarını hesaplamak için uzmanların ağırlıklarını diskten **ikinci kez** okuyor. Bu şart mı?
+* **Matematiksel Gözlem:** LoRA gradyanları donmuş temel ağırlık $W_0$'ı **içermez**:
+
+$$\nabla B = s\,\big(dy^\top (xA^\top)\big), \qquad \nabla A = \big(s\,dy\,B\big)^\top x$$
+
+  Yani $\nabla A$ ve $\nabla B$ için yalnızca girdi aktivasyonu $x$ ve yukarıdan gelen gradyan $dy$ yeterlidir. $W_0$ sadece gradyanı bir alt katmana taşırken gerekir:
+
+$$dx = dy\,W_0 + dh\,A$$
+
+* **Uygulama:** İleri geçişte katman başına $h_{\text{latent}}$ diske yazılır (127×3584 bf16 = **0,9 MB**). Geri geçişte 7,6 GB'lık uzman okuması, 0,9 MB'lık aktivasyon okumasıyla değiştirilir.
+* **Bedeli:** Gradyanın uzmanların donmuş ağırlıkları üzerinden alt katmanlara akışı yaklaşıklanır; LoRA'nın kendi gradyanları **tam kalır**. Yanlılık derinlikle birikir, yani en alt katmanların adaptörleri daha az doğru eğitilir.
+* **Kazanç:** Adım süresi **~13,4 saatten ~7,7 saate** (%43 azalma).
 
 ---
 
