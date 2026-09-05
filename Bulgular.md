@@ -503,3 +503,66 @@ Kalan `~1e-3` mertebesindeki fark, motorumuzun bfloat16 hesabı ile C'nin double
 
 **Bu bölümün sonucu:** LazyLoRA motoru artık Kimi K3'ün ileri geçişini, bağımsız bir referans implementasyona karşı ölçülmüş biçimde yeniden üretmektedir. Eğitimin anlamlı olabilmesinin ön koşulu buydu.
 
+
+---
+
+## 16. Deney 8: Yönlendirme Ölçümü, Türkçe ve İngilizce (5-6 Eylül 2026, yeni makine)
+
+Motor eğitimsiz, ileri geçiş doğrulanmış; her katmanda her token'ın seçtiği 16 uzman ve
+ağırlıkları kaydedildi (`lazy_lora/monitor/trace.py`, `scripts/measure_routing.py`,
+`scripts/analyze_trace.py`). Aynı anlamdaki iki paragraf: Türkçe 264 token, İngilizce 159
+token (aynı içerik Türkçede %66 daha fazla token). Katman 1-66 (66 MoE katmanı).
+İzler: `LazyLora_Workspace/traces/{tr_paragraph_2026-09-05b, en_paragraph_2026-09-05}`.
+
+### 16.1 Yoğunlaşma
+
+| | Türkçe (264 tok) | İngilizce (159 tok) |
+|---|---:|---:|
+| Benzersiz uzman / tekdüze beklenti, katman ortalaması | 0.56 | 0.52 |
+| N=127'de benzersiz uzman (tekdüze: 805) | 450 | 396 |
+| En sık 100 uzmanın aktivasyon payı | %47-80 | %39-86 |
+| Kullanım entropisi (tekdüze 9.81 bit) | 6.5-8.7 | 6.8-9.0 |
+| Etkin uzman / token (16 üzerinden) | 11-16 | 12-16 |
+
+Yoğunlaşma **derinlikle artıyor**: İngilizcede katman 1'de 690, katman 50'de 290 benzersiz
+uzman. Derin katmanlarda uzmanların üçte ikisi bir metin için hiç okunmuyor; ikamet
+önbelleğinin en kazançlı yeri derin katmanlar. Birleştirme ağırlıkları düz (etkin 12-16),
+yani "yalnızca en ağır uzmanları hesapla" kestirmesi işe yaramaz.
+
+### 16.2 Öngörülebilirlik yok
+
+Ardışık token Jaccard'ı 0.05-0.33 (zamansal yerellik zayıf); katmanlar arası Jaccard ~0.008,
+rastgele seviyesi (uzman numaraları katmanlar arasında bağımsız). Çıkarım offloading
+literatürünün ön-getirme varsayımı bu modelde token düzeyinde tutmuyor. Doğru araç tahmin
+değil, batch üzerinden amortisman ve en sık uzmanları sabit tutan önbellek (rapor §6.1).
+
+### 16.3 Dil bağımlılığı: yok (ilk katmanlar hariç)
+
+80 token'lık eşit pencerelerde benzersiz uzman kümelerinin Jaccard örtüşmesi, 66 katman ort.:
+
+| Karşılaştırma | Jaccard |
+|---|---:|
+| Türkçe vs İngilizce (farklı dil, aynı anlam) | **0.447** |
+| İngilizce 1. yarı vs 2. yarı (aynı dil, farklı içerik) | 0.418 |
+| Türkçe 1. vs 2. yarı / 1. vs 3. | 0.419 / 0.401 |
+
+Diller arası örtüşme, aynı dilin farklı içerikleri arasındaki örtüşmeden düşük değil; uzman
+seçimini dil değil içerik belirliyor (rapor §6.2'deki (c) sonucu). İstisna: katman 1 ve 5'te
+TR/EN örtüşmesi (0.44, 0.36) aynı dil içi örtüşmeden (0.54, 0.51) belirgin düşük; dil
+özgüllüğü ilk ~10 katmanla sınırlı. Eşit N=159'da Türkçe **daha yoğun** (66 katmanın 54'ünde
+daha az benzersiz uzman; entropi 7.38 vs 7.63 bit), yani "az kaynaklı dil daha entropik
+yönlendirilir" hipotezi (b) bu çiftte tutmuyor; tersi.
+
+Uyarı: tek paragraf çifti. Yayın için birkaç metin türü ve üçüncü dil gerekir (Faz 1 devamı).
+
+### 16.4 Bu makinede ölçülen maliyet (NVMe gövde, boş disk)
+
+| | 159 token | 264 token |
+|---|---:|---:|
+| Katman başına süre | 100-280 s (ort. 137) | 130-160 s |
+| Toplam okuma (66 katman) | 584 GB | 655 GB |
+| Tepe RSS | 2.87 GB | 2.97 GB |
+
+Okuma ağırlıklı olarak uzmanlardan; gövde NVMe'de olduğu için katman süresi artık uzman
+süpürmesi + hesapla belirleniyor. 264 token 159'dan yalnızca ~%10 daha yavaş: maliyet
+süpürme başına, token başına değil (rapor §3.2 doğrulandı).

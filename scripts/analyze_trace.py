@@ -120,18 +120,39 @@ def compare(name_a, la, name_b, lb):
               f"{entropy_bits(ca / ca.sum()):.2f} | {entropy_bits(cb / cb.sum()):.2f} |")
 
 
+def analyze_prefix(trace_dir, prefix):
+    """Like analyze() but on the first `prefix` tokens only (fair cross-trace comparison)."""
+    manifest, layers = read_trace(trace_dir)
+    layers = {L: (i[:prefix], w[:prefix]) for L, (i, w) in layers.items()}
+    keys = sorted(layers)
+    rows = {}
+    for i, L in enumerate(keys):
+        idx, w = layers[L]
+        nxt = layers[keys[i + 1]][0] if i + 1 < len(keys) and keys[i + 1] == L + 1 else None
+        rows[L] = layer_stats(idx, w, nxt)
+    manifest = dict(manifest, n_tokens=min(prefix, manifest.get("n_tokens", prefix)))
+    return manifest, rows, {L: prefix_curve(layers[L][0]) for L in keys}, layers
+
+
 def main():
-    dirs = sys.argv[1:]
+    args = sys.argv[1:]
+    prefix = None
+    if "--prefix" in args:
+        i = args.index("--prefix")
+        prefix = int(args[i + 1])
+        del args[i:i + 2]
+    dirs = args
     if not dirs:
         print(__doc__)
         return 1
     results = []
     for d in dirs:
-        manifest, rows, curves, layers = analyze(d)
+        manifest, rows, curves, layers = analyze(d) if prefix is None else analyze_prefix(d, prefix)
         print_report(os.path.basename(d.rstrip("/")), manifest, rows, curves)
         results.append((os.path.basename(d.rstrip("/")), layers))
-        with open(os.path.join(d, "analysis.json"), "w") as f:
-            json.dump({"rows": rows, "prefix_curves": curves}, f, indent=1)
+        if prefix is None:
+            with open(os.path.join(d, "analysis.json"), "w") as f:
+                json.dump({"rows": rows, "prefix_curves": curves}, f, indent=1)
     if len(results) == 2:
         compare(results[0][0], results[0][1], results[1][0], results[1][1])
     return 0
