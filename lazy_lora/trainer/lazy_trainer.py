@@ -190,6 +190,7 @@ class LazyLoRATrainer:
         # test next to a real run, or two runs) silently read each other's activations in
         # the backward pass. The directory is removed in close().
         self._act_dir = os.path.join(self.config.paths.activation_cache_dir, f"run_{os.getpid()}")
+        self._remove_stale_activation_dirs()
         self.act_buffer = ActivationRingBuffer(
             cache_dir=self._act_dir,
             num_layers=self.config.model.num_hidden_layers,
@@ -251,6 +252,32 @@ class LazyLoRATrainer:
             total_layers=self.config.model.num_hidden_layers,
         )
         self.dashboard = TerminalDashboard()
+
+    def _remove_stale_activation_dirs(self) -> None:
+        """Delete run_<pid> directories whose process is gone. Never touch a live one: a
+        manual cleanup once deleted the directory of a running measurement at layer 25."""
+        import shutil
+        base = self.config.paths.activation_cache_dir
+        try:
+            names = os.listdir(base)
+        except OSError:
+            return
+        for name in names:
+            if not name.startswith("run_"):
+                continue
+            try:
+                pid = int(name[4:])
+            except ValueError:
+                continue
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, 0)
+                continue                      # alive: leave it alone
+            except ProcessLookupError:
+                shutil.rmtree(os.path.join(base, name), ignore_errors=True)
+            except PermissionError:
+                continue                      # alive, other user
 
     def close(self) -> None:
         """Drop this run's activation scratch directory and open shard descriptors."""
