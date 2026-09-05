@@ -169,6 +169,9 @@ class LazyLoRATrainer:
         self.mmap_streamer = MmapTensorStreamer(self.config.paths.base_model_dir)
         self.compute_dtype = (torch.float32 if (HAS_TORCH and self.mmap_streamer.upcast_float32)
                               else (torch.bfloat16 if HAS_TORCH else None))
+        # Optional expert access trace (lazy_lora.monitor.trace.ExpertTraceWriter); set by
+        # measurement scripts. Records every routing decision of the forward pass.
+        self.trace = None
         self.trunk_streamer = LayerTrunkStreamer(
             self.mmap_streamer,
             device=self.device,
@@ -574,7 +577,17 @@ class LazyLoRATrainer:
         if not (HAS_TORCH and isinstance(h_in, torch.Tensor)):
             raise RuntimeError("the LazyLoRA engine runs on torch tensors; the NumPy path was removed")
         self.act_buffer.save_activation(layer_idx, h_in)
+        t0 = time.time()
+        bytes0 = self.mmap_streamer.bytes_read
         h_out, active_experts = self._run_layer(layer_idx, h_in, self._block_residual)
+        if self.trace is not None and getattr(self, "_last_routing", None) is not None:
+            idx, w = self._last_routing
+            self._last_routing = None
+            self.trace.record_layer(layer_idx, idx, w, extra={
+                "seconds": round(time.time() - t0, 2),
+                "bytes_read": int(self.mmap_streamer.bytes_read - bytes0),
+                "is_kda": bool(self.config.model.is_kda_layer(layer_idx)),
+            })
         if self._is_boundary(layer_idx):
             entry = h_in.reshape(-1, h_in.shape[-1]).unsqueeze(1)
             self._block_residual = entry if self._block_residual is None else torch.cat(
@@ -621,6 +634,8 @@ class LazyLoRATrainer:
             return self._add_to_prefix(prefix_sum, mlp_out), []
 
         topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
+        if self.trace is not None and not torch.is_grad_enabled():
+            self._last_routing = (topk_indices, topk_weights)
         active_experts = self.expert_streamer.sort_by_disk_order(
             layer_idx, self.router.get_active_expert_set(topk_indices))
         moe_out = self._moe_forward(layer_idx, bundle, h_moe_norm, topk_indices, topk_weights, active_experts)

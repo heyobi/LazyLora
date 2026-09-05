@@ -258,3 +258,22 @@ Devam etmek: `python -m lazy_lora.trainer.lazy_trainer --resume <ckpt.pt> --step
 (`LazyLoRATrainer.load_checkpoint`, `train(resume_from=...)`; veri imleci
 `StreamingDatasetIterator.get_batches(skip_samples=...)` ile uygulanır).
 Eski biçim (yalnızca LoRA sözlüğü) da yüklenir, ama optimizer sıfırdan başlar.
+
+## 13. TEMİZ C REFERANSI VE ÖLÇÜM ALETİ (5 Eylül 2026, akşam)
+
+C motoru bu makinede 13 katmanla yeniden koşturuldu (`LazyLora_Workspace/run_cref13.sh`).
+Boş shard'lar yüzünden motor tam dizini reddettiği için katman 0-12 + embed/lm_head
+shard'larına sembolik bağlarla `/mnt/nvme/lazylora/k3_partial13` dizini kuruldu. Koşu geçerli
+(uzman düşürme yok, exit 0), tepe RSS 6.11 GB, 169 s. Yeni döküm: `chdump_2026-09-05/`.
+
+Yeni dökümle karşılaştırma (`cmp13_vs_newdump_2026-09-05.log`): katman 9 kosinüs
+0.9966 → **0.99951**, katman 12 → **0.99995**. Eski dökümdeki düşüş referansın düşürdüğü
+6 uzmandandı; motorumuzda katman 0-12'de yapısal fark yok.
+
+**Uzman erişim izi** (`lazy_lora/monitor/trace.py`): `trainer.trace` ayarlıysa her katmanın
+(token, seçilen 16 uzman, ağırlık) kaydı `trace.bin`'e, süre/bayt/tepe RSS `trace.json`'a
+yazılır. `scripts/measure_routing.py` bir metni bu izle ileri geçirir;
+`scripts/analyze_trace.py` yoğunlaşma, entropi, etkin uzman sayısı, zamansal ve katmanlar
+arası Jaccard, N'ye göre benzersiz uzman eğrisi (tek koşudan, nedensellik sayesinde) ve iki
+iz arasında dil karşılaştırması üretir. İstemler `LazyLora_Workspace/prompts/` (aynı anlam:
+Türkçe 263 token, İngilizce 158 token; Türkçe %66 daha fazla token harcıyor).
