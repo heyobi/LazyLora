@@ -277,3 +277,29 @@ yazılır. `scripts/measure_routing.py` bir metni bu izle ileri geçirir;
 arası Jaccard, N'ye göre benzersiz uzman eğrisi (tek koşudan, nedensellik sayesinde) ve iki
 iz arasında dil karşılaştırması üretir. İstemler `LazyLora_Workspace/prompts/` (aynı anlam:
 Türkçe 263 token, İngilizce 158 token; Türkçe %66 daha fazla token harcıyor).
+
+## 14. NVMe PLANI (5 Eylül 2026)
+
+117 GB'lık NVMe (`/mnt/nvme`, ext4) şöyle bölüştürüldü:
+
+| Ne | Boyut | Yol |
+|---|---|---|
+| Paketlenmiş gövde (`trunk.bin` + `trunk.json`, C motorunun `pack_trunk.py` çıktısı; 93 katmanın uzman dışı bütün tensörleri) | 108.8 GB (101.3 GiB) | `/mnt/nvme/lazylora/k3trunk/` |
+| Aktivasyon halka tamponu (süreç başına alt dizin) | N=2048'de ~2.7 GB | `/mnt/nvme/lazylora/activations/` |
+| Checkpoint'ler (en yeni 3 tanesi tutulur, `keep_checkpoints`) | ~1.8 GB × 3 | `/mnt/nvme/lazylora/checkpoints/` |
+| Katman 0-12 için sembolik bağ dizini (C motoru, yer kaplamaz) | 0 | `/mnt/nvme/lazylora/k3_partial13/` |
+
+Gövde NVMe'de olunca HDD yalnızca yönlendirilmiş uzmanları (1.42 TB) sıralı süpürür;
+katman başına 0.8-2.3 GB'lık gövde okuması HDD kafasıyla yarışmaz. Embedding satırları
+(seyrek) ve lm_head (adımda bir kez, 2.35 GB sıralı) HDD'de kalır; 4.7 GB'lık yer daha
+değerli.
+
+Mekanizma: `SafetensorsIndex.apply_trunk_overlay` (`mmap_loader.py`), `trunk.json`'daki her
+tensörü şekil/dtype/bayt sayısı shard indeksiyle birebir tutuyorsa `trunk.bin`'e yönlendirir;
+tutmayan tensör shard'da kalır ve uyarı basılır. `LAZYLORA_TRUNK_DIR=""` kapatır.
+Doğrulama: `python scripts/verify_trunk.py` (seçilen katmanların bütün tensörlerini iki
+kaynaktan bayt bayt karşılaştırır). C motoru da aynı paketi `--trunk /mnt/nvme/lazylora/k3trunk`
+ile kullanabilir.
+
+HDD'deki `/mnt/disk2tb/hamza/k3trunk` (102 GiB) NVMe kopyası doğrulandıktan sonra silinebilir;
+HDD %94 dolu, bu 102 GiB'lik yer açar (karar kullanıcının).

@@ -141,6 +141,11 @@ def default_dataset_dir() -> str:
     return _env_path("LAZYLORA_DATASET_DIR", os.path.join(default_workspace_dir(), "datasets"))
 
 
+def default_trunk_dir() -> str:
+    """Packed non-expert weights ("trunk", 108.8 GB) on the NVMe; see SafetensorsIndex."""
+    return _env_path("LAZYLORA_TRUNK_DIR", os.path.join(default_fast_scratch_dir(), "k3trunk"))
+
+
 def default_reference_fixtures_dir() -> str:
     """The op fixtures shipped with kimi-k3-in-c (sibling checkout of this repository)."""
     return _env_path(
@@ -212,6 +217,7 @@ class TrainingConfig:
     warmup_steps: int = 50
     max_steps: int = 2000
     save_steps: int = 100
+    keep_checkpoints: int = 3             # newest N step checkpoints kept on the NVMe (~1.8 GB each)
     logging_steps: int = 1
     eval_steps: int = 50
     adam_beta1: float = 0.9

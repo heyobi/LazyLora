@@ -684,6 +684,11 @@ class LazyLoRATrainer:
         """
         sum_e w_e(token) * expert_e(h_latent), streaming the experts in disk order.
 
+        Each expert runs only on the rows that selected it (gather / index_add), not on the
+        whole batch behind a mask: at N=127 an expert serves ~2-3 tokens on average, so the
+        masked form did ~40x the useful arithmetic (report finding K5). The result is the
+        same up to float rounding, since masked rows contributed exact zeros.
+
         The sum over the 16 experts of a token is accumulated in float32 and returned in
         float32 (the latent RMSNorm that follows runs on it before the cast back), as the
         C reference accumulates in double. Summing in bf16 shifts layer outputs by ~1e-3
@@ -692,54 +697,61 @@ class LazyLoRATrainer:
         out = torch.zeros(h_latent.shape, dtype=torch.float32, device=h_latent.device)
         for exp_id, e in self.expert_streamer.stream_experts(layer_idx, active_experts):
             mask = (topk_indices == exp_id)                                  # [N, top_k]
-            if not mask.any():
+            rows = mask.any(dim=-1).nonzero(as_tuple=False).squeeze(-1)      # tokens using e
+            if rows.numel() == 0:
                 continue
-            e_gate = F.linear(h_latent, e.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)
-            e_up = F.linear(h_latent, e.up_proj) + bundle.up_lora.forward_lora_only(h_latent)
+            x = h_latent.index_select(0, rows)
+            e_gate = F.linear(x, e.gate_proj) + bundle.gate_lora.forward_lora_only(x)
+            e_up = F.linear(x, e.up_proj) + bundle.up_lora.forward_lora_only(x)
             e_situ = situ_glu_forward(e_gate, e_up)
             e_down = F.linear(e_situ, e.down_proj) + bundle.down_lora.forward_lora_only(e_situ)
-            token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
-            out = out + e_down.float() * token_weights.float()
-            del e, e_gate, e_up, e_situ, e_down
+            tw = (topk_weights.index_select(0, rows) * mask.index_select(0, rows).to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
+            out.index_add_(0, rows, e_down.float() * tw.float())
+            del e, x, e_gate, e_up, e_situ, e_down
         return out
 
     def _routed_experts_backward(self, layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts, grad_out):
         """
         Backward of `_routed_experts_forward`: streams the experts a second time, accumulates
         the LoRA gradients of gate/up/down, and returns (dL/dh_latent, dL/dtopk_weights).
+        Like the forward, each expert only touches the rows that selected it.
 
         dL/dtopk_weights is the per-token dot product of the upstream gradient with the
         expert output, placed in the slot that selected the expert. It lets the gradient
         reach the (frozen) router's input, as it does in the real model.
         """
         grad_h = torch.zeros(h_latent.shape, dtype=torch.float32, device=h_latent.device)
-        grad_w = torch.zeros_like(topk_weights)
+        grad_w = torch.zeros(topk_weights.shape, dtype=torch.float32, device=h_latent.device)
         with torch.no_grad():
             for exp_id, e in self.expert_streamer.stream_experts(layer_idx, active_experts):
                 mask = (topk_indices == exp_id)
-                if not mask.any():
+                rows = mask.any(dim=-1).nonzero(as_tuple=False).squeeze(-1)
+                if rows.numel() == 0:
                     continue
-                gate = F.linear(h_latent, e.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)
-                up = F.linear(h_latent, e.up_proj) + bundle.up_lora.forward_lora_only(h_latent)
+                x = h_latent.index_select(0, rows)
+                g_out = grad_out.index_select(0, rows)
+                m = mask.index_select(0, rows)
+                gate = F.linear(x, e.gate_proj) + bundle.gate_lora.forward_lora_only(x)
+                up = F.linear(x, e.up_proj) + bundle.up_lora.forward_lora_only(x)
                 situ = situ_glu_forward(gate, up)
                 e_down = F.linear(situ, e.down_proj) + bundle.down_lora.forward_lora_only(situ)
 
-                dot = (grad_out.float() * e_down.float()).sum(dim=-1, keepdim=True)   # [N, 1]
-                grad_w = grad_w + (dot * mask.to(dot.dtype)).to(grad_w.dtype)
+                dot = (g_out.float() * e_down.float()).sum(dim=-1, keepdim=True)     # [n_e, 1]
+                grad_w.index_add_(0, rows, dot * m.to(dot.dtype))
 
-                token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
-                d_down = (grad_out.float() * token_weights.float()).to(h_latent.dtype)
+                tw = (topk_weights.index_select(0, rows) * m.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
+                d_down = (g_out.float() * tw.float()).to(h_latent.dtype)
 
                 gA, gB, d_situ = bundle.down_lora.compute_lora_gradients(d_down, situ, e.down_proj)
                 bundle.down_lora.accumulate_grad(gA, gB)
                 d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                gA, gB, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_latent, e.gate_proj)
+                gA, gB, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, x, e.gate_proj)
                 bundle.gate_lora.accumulate_grad(gA, gB)
-                gA, gB, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_latent, e.up_proj)
+                gA, gB, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, x, e.up_proj)
                 bundle.up_lora.accumulate_grad(gA, gB)
-                grad_h = grad_h + (d_in_g.float() + d_in_u.float())
-                del e, gate, up, situ, e_down, d_down, d_situ, d_gate, d_up, d_in_g, d_in_u
-        return grad_h.to(h_latent.dtype), grad_w
+                grad_h.index_add_(0, rows, d_in_g.float() + d_in_u.float())
+                del e, x, g_out, gate, up, situ, e_down, d_down, d_situ, d_gate, d_up, d_in_g, d_in_u
+        return grad_h.to(h_latent.dtype), grad_w.to(topk_weights.dtype)
 
     def _lora_params_of(self, bundle) -> List[Tuple[Any, "torch.Tensor"]]:
         """(module, parameter) pairs for every LoRA tensor in a layer bundle."""
@@ -998,7 +1010,24 @@ class LazyLoRATrainer:
                 f.write(os.path.basename(ckpt_path) + "\n")
         except OSError:
             pass
+        self._prune_checkpoints(keep=self.config.training.keep_checkpoints)
         return ckpt_path
+
+    def _prune_checkpoints(self, keep: int) -> None:
+        """Keep only the newest `keep` step checkpoints: each is ~1.8 GB (fp32 LoRA + Adam)
+        and the NVMe has ~14 GB left beside the packed trunk."""
+        if keep <= 0:
+            return
+        d = self.config.paths.checkpoints_dir
+        try:
+            files = sorted(f for f in os.listdir(d) if f.startswith("lazy_lora_step_") and f.endswith(".pt"))
+        except OSError:
+            return
+        for f in files[:-keep]:
+            try:
+                os.remove(os.path.join(d, f))
+            except OSError:
+                pass
 
     def load_checkpoint(self, path: str) -> Dict[str, Any]:
         """Restore LoRA tensors, optimizer state and RNG from a checkpoint; returns its metadata."""

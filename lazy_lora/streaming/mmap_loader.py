@@ -11,7 +11,7 @@ import struct
 from typing import Dict, Any, Optional, Tuple, List, Union
 import numpy as np
 
-from lazy_lora.core.config import default_cache_dir
+from lazy_lora.core.config import default_cache_dir, default_trunk_dir
 
 try:
     import torch
@@ -42,9 +42,13 @@ class SafetensorsIndex:
         # Shards that exist by name but could not be indexed (empty, truncated, bad header).
         # A zero-byte shard is exactly how two whole layers went missing unnoticed once.
         self.bad_shards: List[str] = []
+        # Tensors served from the packed trunk on the NVMe instead of the HDD shards.
+        self.trunk_remapped: int = 0
+        self.trunk_path: Optional[str] = None
         self._index_built = False
         if os.path.isdir(model_dir):
             self.build_index()
+            self.apply_trunk_overlay()
 
     def _cache_file(self) -> str:
         """Index cache path, keyed by model directory.
@@ -126,6 +130,59 @@ class SafetensorsIndex:
 
         self._index_built = True
         self._warn_bad_shards()
+
+    def apply_trunk_overlay(self, trunk_dir: Optional[str] = None) -> int:
+        """
+        Point every non-expert per-layer tensor at the packed trunk (trunk.bin + trunk.json,
+        the layout kimi-k3-in-c's pack_trunk.py writes) when a complete copy exists.
+
+        The routed experts (1.42 TB) stay on the HDD; the 108.8 GB trunk on the NVMe is
+        read at NVMe speed instead of competing with the expert sweep for the HDD head.
+        A tensor is only remapped if its shape, dtype and byte count match the shard
+        index, so a stale or mismatched pack can never silently serve wrong bytes.
+        LAZYLORA_TRUNK_DIR="" disables the overlay.
+        """
+        trunk_dir = default_trunk_dir() if trunk_dir is None else trunk_dir
+        env = os.environ.get("LAZYLORA_TRUNK_DIR")
+        if env is not None and env.strip() == "":
+            return 0
+        bin_path = os.path.join(trunk_dir, "trunk.bin")
+        json_path = os.path.join(trunk_dir, "trunk.json")
+        if not (os.path.isfile(bin_path) and os.path.isfile(json_path)):
+            return 0
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except Exception:
+            return 0
+        layers = meta.get("layers", [])
+        expected_size = max((l["file_off"] + l["nbytes"] for l in layers), default=0)
+        actual = os.path.getsize(bin_path)
+        if actual < expected_size:
+            print(f"[!] trunk overlay skipped: {bin_path} is {actual} bytes, pack needs {expected_size} (copy incomplete?)", flush=True)
+            return 0
+        remapped = 0
+        mismatched = []
+        for l in layers:
+            base = int(l["file_off"])
+            for name, t in l["tensors"].items():
+                resolved = self._resolve_name(name)
+                if resolved is None:
+                    continue
+                shard_path, start, end, shape, dtype = self.tensor_locations[resolved]
+                if list(shape) != list(t["shape"]) or dtype != t["dtype"] or (end - start) != int(t["nbytes"]):
+                    mismatched.append(name)
+                    continue
+                s = base + int(t["off"])
+                self.tensor_locations[resolved] = (bin_path, s, s + int(t["nbytes"]), shape, dtype)
+                remapped += 1
+        self.trunk_remapped = remapped
+        self.trunk_path = bin_path if remapped else None
+        if mismatched:
+            print(f"[!] trunk overlay: {len(mismatched)} tensors did not match the shard index and stay on the shards, e.g. {mismatched[:3]}", flush=True)
+        if remapped:
+            print(f"[trunk] {remapped} non-expert tensors served from {bin_path}", flush=True)
+        return remapped
 
     def _warn_bad_shards(self) -> None:
         if self.bad_shards:

@@ -104,10 +104,9 @@ class LayerTrunkStreamer:
         for name in ("self_attention_res_norm", "self_attention_res_proj",
                      "mlp_res_norm", "mlp_res_proj"):
             res[name] = self.mmap_streamer.load_tensor(f"{prefix}{name}.weight", target_device=self.device)
-        q_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.q_proj.weight", target_device=self.device)
-        k_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.k_proj.weight", target_device=self.device)
-        v_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.v_proj.weight", target_device=self.device)
-        o_proj = self.mmap_streamer.load_tensor(f"{prefix}self_attn.o_proj.weight", target_device=self.device)
+        # The attention projections are streamed by load_attention_weights when the
+        # sublayer runs; loading them here as well read 0.7 GB per KDA layer for nothing.
+        q_proj = k_proj = v_proj = o_proj = None
 
         d_hidden = self.hidden_size
 
@@ -115,8 +114,6 @@ class LayerTrunkStreamer:
         # the real norms on every MLA layer, which has q_a_proj / q_b_proj and no q_proj:
         # input_layernorm and post_attention_layernorm silently became all-ones there, so
         # the MoE saw a unit-scale input and its output came out roughly 90x too large.
-        # The attention projections below are only used by the mock paths now; the real
-        # ones are streamed by load_attention_weights per layer type.
         missing = [n for n, v in (("input_layernorm", in_norm), ("post_attention_layernorm", post_norm)) if v is None]
         missing += [n for n, v in res.items() if v is None]
         if missing:
@@ -127,23 +124,6 @@ class LayerTrunkStreamer:
         if post_norm is None:
             post_norm = (torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
                          if HAS_TORCH else np.ones(d_hidden, dtype=np.float32))
-        for name, value in (("q_proj", q_proj), ("k_proj", k_proj),
-                            ("v_proj", v_proj), ("o_proj", o_proj)):
-            if value is not None or not synthetic_enabled():
-                # MLA layers legitimately have no q_proj; the real attention path never
-                # reads these four, so only the mock configuration gets stand-ins.
-                continue
-            synth = (torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
-                     if HAS_TORCH else (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32))
-            if name == "q_proj":
-                q_proj = synth
-            elif name == "k_proj":
-                k_proj = synth
-            elif name == "v_proj":
-                v_proj = synth
-            else:
-                o_proj = synth
-
         for name, value in list(res.items()):
             if value is not None:
                 continue
