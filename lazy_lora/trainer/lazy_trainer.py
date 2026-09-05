@@ -20,7 +20,7 @@ except ImportError:
     torch = None
     nn = object
 
-from lazy_lora.core.config import LazyLoraConfig, get_default_config
+from lazy_lora.core.config import LazyLoraConfig, get_default_config, synthetic_allowed
 from lazy_lora.core.lora_layer import LazyLoRALinear
 from lazy_lora.core.moe_router import KimiK3MoERouter
 from lazy_lora.core.situ_activation import situ_glu_forward, situ_glu_backward
@@ -33,6 +33,36 @@ from lazy_lora.trainer.loss import compute_cross_entropy_loss
 from lazy_lora.trainer.optimizer import LazyLoRAOptimizer
 from lazy_lora.monitor.metrics import MetricsTracker
 from lazy_lora.monitor.dashboard import TerminalDashboard
+
+
+if HAS_TORCH:
+    class RoutedExpertsFunction(torch.autograd.Function):
+        """
+        The routed-expert map of one MoE layer as a single autograd node.
+
+        The rest of a decoder layer (bank mixing, norms, attention, shared expert, latent
+        projections) is cheap enough to replay under autograd in the backward pass, so it
+        is. The routed experts are not: keeping ~600 streamed expert matrices alive in an
+        autograd graph is tens of gigabytes. This node streams them once in forward and
+        once more in backward, computing the LoRA gradients and dL/dh_latent by hand,
+        while autograd handles everything around it. Forward and backward therefore share
+        one definition of the layer, which is what the old hand-written backward lacked.
+        """
+
+        @staticmethod
+        def forward(ctx, h_latent, topk_weights, topk_indices, trainer, layer_idx, bundle, active_experts):
+            out = trainer._routed_experts_forward(layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts)
+            ctx.save_for_backward(h_latent, topk_weights, topk_indices)
+            ctx.trainer, ctx.layer_idx, ctx.bundle, ctx.active_experts = trainer, layer_idx, bundle, active_experts
+            return out
+
+        @staticmethod
+        def backward(ctx, grad_out):
+            h_latent, topk_weights, topk_indices = ctx.saved_tensors
+            grad_h, grad_w = ctx.trainer._routed_experts_backward(
+                ctx.layer_idx, ctx.bundle, h_latent, topk_indices, topk_weights, ctx.active_experts, grad_out
+            )
+            return grad_h, grad_w, None, None, None, None, None
 
 
 class LoRALayerBundle:
@@ -137,6 +167,8 @@ class LazyLoRATrainer:
 
         # Initialize streaming subsystems
         self.mmap_streamer = MmapTensorStreamer(self.config.paths.base_model_dir)
+        self.compute_dtype = (torch.float32 if (HAS_TORCH and self.mmap_streamer.upcast_float32)
+                              else (torch.bfloat16 if HAS_TORCH else None))
         self.trunk_streamer = LayerTrunkStreamer(
             self.mmap_streamer,
             device=self.device,
@@ -151,8 +183,12 @@ class LazyLoRATrainer:
             moe_intermediate_size=self.config.model.moe_intermediate_size,
             shared_intermediate_size=self.config.model.moe_intermediate_size * self.config.model.num_shared_experts,
         )
+        # One sub-directory per process: two engines sharing act_layer_NNN.bin (a mock
+        # test next to a real run, or two runs) silently read each other's activations in
+        # the backward pass. The directory is removed in close().
+        self._act_dir = os.path.join(self.config.paths.activation_cache_dir, f"run_{os.getpid()}")
         self.act_buffer = ActivationRingBuffer(
-            cache_dir=self.config.paths.activation_cache_dir,
+            cache_dir=self._act_dir,
             num_layers=self.config.model.num_hidden_layers,
         )
 
@@ -213,6 +249,19 @@ class LazyLoRATrainer:
         )
         self.dashboard = TerminalDashboard()
 
+    def close(self) -> None:
+        """Drop this run's activation scratch directory and open shard descriptors."""
+        import shutil
+        try:
+            self.act_buffer.clean_cache()
+            shutil.rmtree(self._act_dir, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            self.mmap_streamer.close()
+        except Exception:
+            pass
+
     def _embed_tokens(self, input_ids: Union["torch.Tensor", np.ndarray]) -> Union["torch.Tensor", np.ndarray]:
         """Embed input tokens by reading only the rows the batch actually touches.
 
@@ -236,6 +285,7 @@ class LazyLoRATrainer:
         embed_weight = self.mmap_streamer.load_tensor("model.embed_tokens.weight", target_device=self.device)
 
         if embed_weight is None:
+            synthetic_allowed("model.embed_tokens.weight")
             # Synthetic embedding table for testing
             if HAS_TORCH:
                 embed_weight = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
@@ -260,6 +310,7 @@ class LazyLoRATrainer:
         shape = self.mmap_streamer.tensor_shape("lm_head.weight")
 
         if shape is None:
+            synthetic_allowed("lm_head.weight")
             # Synthetic head for tests / profiling: emit it as a single band.
             if HAS_TORCH:
                 w = torch.randn(vocab_sz, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
@@ -278,20 +329,25 @@ class LazyLoRATrainer:
             yield start, end, band
             del band
 
-    def _finalize_hidden(self, hidden_state):
+    def _finalize_hidden(self, hidden_state, bank):
         """
         Close out the residual bank and apply the model's final RMSNorm.
 
         After the last layer the model mixes the bank into the stream one more time with
-        its own output gate, then applies model.norm before the LM head.
+        its own output gate, then applies model.norm before the LM head. Differentiable:
+        the backward replays it to get the gradient into the stream and the bank.
         """
         proj = self.mmap_streamer.load_tensor("model.output_attn_res_proj.weight", target_device=self.device)
         norm = self.mmap_streamer.load_tensor("model.output_attn_res_norm.weight", target_device=self.device)
-        if proj is not None and norm is not None:
-            hidden_state = self._mix_block_residual(hidden_state, proj, norm)
+        if proj is None or norm is None:
+            synthetic_allowed("model.output_attn_res_proj / output_attn_res_norm")
+        else:
+            hidden_state = self._mix_block_residual(hidden_state, bank, proj, norm)
 
         final_norm = self.mmap_streamer.load_tensor("model.norm.weight", target_device=self.device)
-        if final_norm is not None:
+        if final_norm is None:
+            synthetic_allowed("model.norm.weight")
+        else:
             hidden_state = RMSNormFunction.forward(
                 hidden_state, final_norm, eps=self.config.model.rms_norm_eps
             )
@@ -340,16 +396,52 @@ class LazyLoRATrainer:
                 grad_h = part if grad_h is None else grad_h + part
             return grad_h
 
+    # ------------------------------------------------------------------ block-residual bank
+    #
+    # Kimi Linear keeps a bank of residual snapshots: at every block boundary layer
+    # (layer_idx % attn_res_block_size == 0) the incoming stream h_in is pushed onto the
+    # bank and the stream restarts from the attention output. Each layer mixes the bank
+    # into the stream twice (before attention, before the MoE) with a learned softmax.
+    #
+    # The bank entries are exactly the h_in of the boundary layers, which the activation
+    # ring buffer already stores, so the backward pass rebuilds the bank a layer sees from
+    # those files instead of storing it again. Gradient that flows into a bank entry is
+    # parked in self._grad_bank and added to that boundary layer's grad_h_in when the
+    # backward sweep reaches it.
+
     def _reset_block_residual(self) -> None:
         """Start a fresh residual bank for a new forward pass."""
         self._block_residual = None
+        self._grad_bank: Dict[int, Any] = {}
 
-    def _mix_block_residual(self, prefix_sum, proj_weight, norm_weight):
+    def _is_boundary(self, layer_idx: int) -> bool:
+        bs = self.config.model.attn_res_block_size
+        return bool(bs) and layer_idx % bs == 0
+
+    def _bank_entries_before(self, layer_idx: int) -> List[int]:
+        """Boundary layers whose h_in is in the bank when `layer_idx` begins (in push order)."""
+        bs = self.config.model.attn_res_block_size
+        if not bs or layer_idx <= 0:
+            return []
+        return [bs * j for j in range((layer_idx - 1) // bs + 1)]
+
+    def _bank_at_entry(self, layer_idx: int, like):
+        """Rebuild the bank tensor [N, num_entries, hidden] a layer saw, from saved activations."""
+        entries = self._bank_entries_before(layer_idx)
+        if not entries:
+            return None
+        parts = []
+        for l in entries:
+            act = self.act_buffer.load_activation(l, target_device=self.device, as_torch=True)
+            if act is None:
+                raise RuntimeError(f"activation of boundary layer {l} is missing; cannot rebuild the bank for layer {layer_idx}")
+            parts.append(act.reshape(-1, act.shape[-1]))
+        return torch.stack(parts, dim=1).to(like.dtype)
+
+    def _mix_block_residual(self, prefix_sum, bank, proj_weight, norm_weight):
         """Mix the residual bank into the live stream (identity when the bank is empty)."""
-        bank = getattr(self, "_block_residual", None)
-        if bank is None or bank.shape[1] == 0 or not isinstance(prefix_sum, torch.Tensor):
+        if bank is None or bank.shape[1] == 0:
             return prefix_sum
-
         shape = prefix_sum.shape
         flat = prefix_sum.reshape(-1, shape[-1])
         mixed = apply_attn_res(
@@ -357,27 +449,6 @@ class LazyLoRATrainer:
             eps=self.config.model.rms_norm_eps,
         )
         return mixed.view(shape)
-
-    def _block_residual_pre_attention(self, layer_idx: int, trunk, h_in):
-        """
-        Mix the bank into the stream, then every `attn_res_block_size` layers push the
-        stream onto the bank and restart it (prefix_sum becomes None).
-
-        Returns (prefix_sum, hidden) where `hidden` feeds the attention sublayer.
-        """
-        block_size = self.config.model.attn_res_block_size
-        prefix_sum = h_in
-        hidden = self._mix_block_residual(
-            prefix_sum, trunk.self_attention_res_proj, trunk.self_attention_res_norm
-        )
-
-        if block_size and layer_idx % block_size == 0 and isinstance(h_in, torch.Tensor):
-            flat = h_in.reshape(-1, h_in.shape[-1]).unsqueeze(1)
-            bank = getattr(self, "_block_residual", None)
-            self._block_residual = flat if bank is None else torch.cat([bank, flat], dim=1)
-            prefix_sum = None
-
-        return prefix_sum, hidden
 
     @staticmethod
     def _add_to_prefix(prefix_sum, sublayer_out):
@@ -394,6 +465,8 @@ class LazyLoRATrainer:
         prefix = f"model.layers.{layer_idx}.block_sparse_moe.gate."
         gate_w = self.mmap_streamer.load_tensor(f"{prefix}weight", target_device=self.device)
         gate_b = self.mmap_streamer.load_tensor(f"{prefix}e_score_correction_bias", target_device=self.device)
+        if gate_w is None or gate_b is None:
+            synthetic_allowed(f"layer {layer_idx} router gate weight / e_score_correction_bias")
         topk_indices, topk_weights = self.router.forward(h_moe_norm, weight=gate_w, bias=gate_b)
         del gate_w, gate_b
         return topk_indices, topk_weights
@@ -455,515 +528,300 @@ class LazyLoRATrainer:
             return out.detach().to(torch.float32).numpy()
         return out
 
-    def _attention_backward(self, layer_idx: int, bundle, h_norm, grad_out):
-        """
-        Gradients through the real attention sublayer.
-
-        The KDA recurrence is not something to differentiate by hand, so the sublayer is
-        replayed under autograd for this one layer and the LoRA gradients are read off it.
-        Only the two attention adapters and the input activation carry gradient; the base
-        weights are frozen, exactly as LoRA requires.
-        """
-        if not HAS_TORCH:
-            return None
-
-        as_numpy = not isinstance(grad_out, torch.Tensor)
-        g_out = torch.from_numpy(np.asarray(grad_out, dtype=np.float32)) if as_numpy else grad_out
-        x_in = h_norm
-        if not isinstance(x_in, torch.Tensor):
-            x_in = torch.from_numpy(np.asarray(x_in, dtype=np.float32))
-
-        params = []
-        owners = []
-        for mod in (bundle.q_lora, bundle.v_lora):
-            if mod.lora_A is not None and mod.lora_B is not None:
-                params.extend([mod.lora_A, mod.lora_B])
-                owners.append(mod)
-
-        with torch.enable_grad():
-            x = x_in.detach().clone().requires_grad_(True)
-            out = self._attention_forward(layer_idx, bundle, x)
-            if not isinstance(out, torch.Tensor):
-                return None
-            grads = torch.autograd.grad(
-                outputs=out,
-                inputs=[x] + params,
-                grad_outputs=g_out.to(out.dtype),
-                allow_unused=True,
-                retain_graph=False,
-            )
-
-        grad_x = grads[0]
-        rest = grads[1:]
-        for i, mod in enumerate(owners):
-            gA, gB = rest[2 * i], rest[2 * i + 1]
-            if gA is not None and gB is not None:
-                mod.accumulate_grad(gA, gB)
-
-        if grad_x is None:
-            return None
-        if as_numpy:
-            return grad_x.detach().to(torch.float32).numpy()
-        return grad_x.to(g_out.dtype)
-
-    def _load_dense_mlp(self, layer_idx: int):
-        """Load the plain MLP weights of a dense (non-MoE) layer, with synthetic fallback."""
-        prefix = f"model.layers.{layer_idx}.mlp."
-        gate = self.mmap_streamer.load_tensor(f"{prefix}gate_proj.weight", target_device=self.device)
-        up = self.mmap_streamer.load_tensor(f"{prefix}up_proj.weight", target_device=self.device)
-        down = self.mmap_streamer.load_tensor(f"{prefix}down_proj.weight", target_device=self.device)
-
-        if gate is None or up is None or down is None:
-            d_in = self.config.model.hidden_size
-            d_mid = self.config.model.intermediate_size
-            if HAS_TORCH:
-                gate = torch.randn(d_mid, d_in, dtype=torch.bfloat16, device=self.device) * 0.01
-                up = torch.randn(d_mid, d_in, dtype=torch.bfloat16, device=self.device) * 0.01
-                down = torch.randn(d_in, d_mid, dtype=torch.bfloat16, device=self.device) * 0.01
-            else:
-                gate = (np.random.randn(d_mid, d_in) * 0.01).astype(np.float32)
-                up = (np.random.randn(d_mid, d_in) * 0.01).astype(np.float32)
-                down = (np.random.randn(d_in, d_mid) * 0.01).astype(np.float32)
-        return gate, up, down
+    def _load_dense_weight(self, layer_idx: int, name: str, shape):
+        """One tensor of the dense MLP (gate_proj / up_proj / down_proj), with mock fallback."""
+        w = self.mmap_streamer.load_tensor(f"model.layers.{layer_idx}.mlp.{name}.weight", target_device=self.device)
+        if w is None:
+            synthetic_allowed(f"layer {layer_idx} dense mlp {name}")
+            w = torch.randn(*shape, dtype=self.compute_dtype, device=self.device) * 0.01
+        return w
 
     def _dense_mlp_forward(self, layer_idx, bundle, h_mid, h_norm):
-        """Dense MLP sublayer: h -> (gate, up) -> SiTU-GLU -> down -> residual add."""
-        gate_w, up_w, down_w = self._load_dense_mlp(layer_idx)
-        if HAS_TORCH and isinstance(h_norm, torch.Tensor):
-            if h_norm.dtype != gate_w.dtype:
-                h_norm = h_norm.to(gate_w.dtype)
-            gate = F.linear(h_norm, gate_w) + bundle.dense_gate_lora.forward_lora_only(h_norm)
-            up = F.linear(h_norm, up_w) + bundle.dense_up_lora.forward_lora_only(h_norm)
-            situ = situ_glu_forward(gate, up)
-            mlp_out = F.linear(situ, down_w) + bundle.dense_down_lora.forward_lora_only(situ)
-        else:
-            gate = np.matmul(h_norm, gate_w.T) + bundle.dense_gate_lora.forward_lora_only(h_norm)
-            up = np.matmul(h_norm, up_w.T) + bundle.dense_up_lora.forward_lora_only(h_norm)
-            situ = situ_glu_forward(gate, up)
-            mlp_out = np.matmul(situ, down_w.T) + bundle.dense_down_lora.forward_lora_only(situ)
-        del gate_w, up_w, down_w, gate, up, situ
+        """
+        Dense MLP sublayer: h -> (gate, up) -> SiTU-GLU -> down -> residual add.
+
+        The three 33792 x 7168 matrices are loaded one at a time and dropped after use:
+        together they are 1.45 GB in bf16 and 2.9 GB in fp32, most of this machine's RAM.
+        (Under autograd they are retained by the graph anyway.)
+        """
+        d_in = self.config.model.hidden_size
+        d_mid = self.config.model.intermediate_size
+        gate_w = self._load_dense_weight(layer_idx, "gate_proj", (d_mid, d_in))
+        if h_norm.dtype != gate_w.dtype:
+            h_norm = h_norm.to(gate_w.dtype)
+        gate = F.linear(h_norm, gate_w) + bundle.dense_gate_lora.forward_lora_only(h_norm)
+        del gate_w
+        up_w = self._load_dense_weight(layer_idx, "up_proj", (d_mid, d_in))
+        up = F.linear(h_norm, up_w) + bundle.dense_up_lora.forward_lora_only(h_norm)
+        del up_w
+        situ = situ_glu_forward(gate, up)
+        del gate, up
+        down_w = self._load_dense_weight(layer_idx, "down_proj", (d_in, d_mid))
+        mlp_out = F.linear(situ, down_w) + bundle.dense_down_lora.forward_lora_only(situ)
+        del down_w, situ
         return mlp_out
 
     def forward_layer(
         self,
         layer_idx: int,
-        h_in: Union["torch.Tensor", np.ndarray],
-    ) -> Tuple[Union["torch.Tensor", np.ndarray], List[int]]:
+        h_in: "torch.Tensor",
+    ) -> Tuple["torch.Tensor", List[int]]:
         """
-        Executes out-of-core forward pass for a single layer, following the block-residual
-        structure of KimiDecoderLayer:
-
-        1. Save the incoming residual stream to the D: drive activation ring buffer.
-        2. Mix the residual bank into the stream, and every `attn_res_block_size` layers
-           push the stream onto the bank and restart it.
-        3. Attention (KDA or MLA) with dense trunk streaming.
-        4. Mix again, then the MoE / dense MLP sublayer.
-        5. Evict layer weights from memory.
+        Out-of-core forward for one layer: save h_in to the activation ring buffer, run the
+        layer against the current bank, then push h_in onto the bank if this is a block
+        boundary. The layer itself is `_run_layer`, shared with the backward pass.
         """
-        # 1. Save boundary activation to D: SSD
+        if not (HAS_TORCH and isinstance(h_in, torch.Tensor)):
+            raise RuntimeError("the LazyLoRA engine runs on torch tensors; the NumPy path was removed")
         self.act_buffer.save_activation(layer_idx, h_in)
+        h_out, active_experts = self._run_layer(layer_idx, h_in, self._block_residual)
+        if self._is_boundary(layer_idx):
+            entry = h_in.reshape(-1, h_in.shape[-1]).unsqueeze(1)
+            self._block_residual = entry if self._block_residual is None else torch.cat(
+                [self._block_residual.to(entry.dtype), entry], dim=1)
+        self.expert_streamer.evict_layer_experts(layer_idx)
+        return h_out, active_experts
 
+    def _run_layer(self, layer_idx: int, h_in, bank):
+        """
+        One decoder layer as a torch graph, following KimiDecoderLayer exactly:
+
+        1. hidden = mix(h_in, bank)                      (pre-attention bank mix)
+        2. boundary layer: bank_local = bank + [h_in], prefix restarts (None)
+        3. attention on norm(hidden); prefix = prefix + attn_out (or attn_out)
+        4. h_mid = mix(prefix, bank_local)               (pre-MoE bank mix)
+        5. MoE (or the dense MLP on layer 0) on norm(h_mid); h_out = prefix + out
+
+        Called under no_grad by the forward pass and under enable_grad by the backward
+        pass, so the two cannot disagree about what the layer computes.
+        """
         trunk = self.trunk_streamer.load_layer_trunk(layer_idx)
         bundle = self.lora_layers[layer_idx]
 
-        # 2. Block residual: mix the bank into the live stream
-        prefix_sum, hidden = self._block_residual_pre_attention(layer_idx, trunk, h_in)
+        hidden = self._mix_block_residual(h_in, bank, trunk.self_attention_res_proj, trunk.self_attention_res_norm)
+        if self._is_boundary(layer_idx):
+            entry = h_in.reshape(-1, h_in.shape[-1]).unsqueeze(1)
+            bank_local = entry if bank is None else torch.cat([bank.to(entry.dtype), entry], dim=1)
+            prefix_sum = None
+        else:
+            bank_local = bank
+            prefix_sum = h_in
 
         h_norm = RMSNormFunction.forward(hidden, trunk.input_layernorm)
-
-        # 3. Real Kimi Linear attention: KDA on most layers, MLA on the full-attention ones.
         attn_out = self._attention_forward(layer_idx, bundle, h_norm)
-        prefix_sum = attn_out if prefix_sum is None else prefix_sum + attn_out
+        prefix_sum = self._add_to_prefix(prefix_sum, attn_out)
         del attn_out
 
-        # 4. Mix again before the MoE / MLP sublayer
-        h_mid = self._mix_block_residual(prefix_sum, trunk.mlp_res_proj, trunk.mlp_res_norm)
-
+        h_mid = self._mix_block_residual(prefix_sum, bank_local, trunk.mlp_res_proj, trunk.mlp_res_norm)
         self.trunk_streamer.release_layer_trunk()
+        h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
 
-        # 5. Dense layers: Kimi K3's first `first_k_dense_replace` layers have a plain MLP
-        # and no experts at all, so routing them through the MoE path would fabricate
-        # hundreds of synthetic experts for tensors that do not exist on disk.
         if bundle.is_dense:
-            h_mlp_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-            mlp_out = self._dense_mlp_forward(layer_idx, bundle, h_mid, h_mlp_norm)
+            mlp_out = self._dense_mlp_forward(layer_idx, bundle, h_mid, h_moe_norm)
             return self._add_to_prefix(prefix_sum, mlp_out), []
 
-        # 6. MoE Routing
-        h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
         topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
-        active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
+        active_experts = self.expert_streamer.sort_by_disk_order(
+            layer_idx, self.router.get_active_expert_set(topk_indices))
+        moe_out = self._moe_forward(layer_idx, bundle, h_moe_norm, topk_indices, topk_weights, active_experts)
+        return self._add_to_prefix(prefix_sum, moe_out.view_as(h_mid)), active_experts
 
-        # Prefetch active experts for next layer if applicable
-        if layer_idx + 1 < self.config.model.num_hidden_layers:
-            self.expert_streamer.request_prefetch_layer(layer_idx + 1, active_experts)
+    def _moe_forward(self, layer_idx, bundle, h_moe_norm, topk_indices, topk_weights, active_experts):
+        """
+        Kimi K3 latent MoE: shared expert at full width, plus the routed experts in the
+        3584-wide latent space (down-project, experts, RMSNorm of the aggregate, up-project).
+        """
+        s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
+        x = h_moe_norm if h_moe_norm.dtype == s_bundle.gate_proj.dtype else h_moe_norm.to(s_bundle.gate_proj.dtype)
+        s_gate = F.linear(x, s_bundle.gate_proj) + bundle.shared_gate_lora.forward_lora_only(x)
+        s_up = F.linear(x, s_bundle.up_proj) + bundle.shared_up_lora.forward_lora_only(x)
+        s_situ = situ_glu_forward(s_gate, s_up)
+        shared_out = F.linear(s_situ, s_bundle.down_proj) + bundle.shared_down_lora.forward_lora_only(s_situ)
+        del s_bundle, s_gate, s_up, s_situ
 
-        # 4. MoE Expert Execution (1 Shared Module + Active Top-16 Routed Experts)
-        # Kimi K3 Latent MoE: h(7168) → down_proj → h_latent(3584) → expert(3584→3072→3584) → up_proj → (7168)
-        # LoRA is applied on the full target_modules set: attention q/v, the shared expert
-        # (7168→6144→7168) and the routed experts in latent space (3584→3072→3584).
-        if HAS_TORCH and isinstance(h_in, torch.Tensor):
-            # Shared expert (single module, input=h_moe_norm [7168], output=7168)
-            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
-            if h_moe_norm.dtype != s_bundle.gate_proj.dtype:
-                h_moe_norm = h_moe_norm.to(s_bundle.gate_proj.dtype)
-            s_gate = F.linear(h_moe_norm, s_bundle.gate_proj) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
-            s_up = F.linear(h_moe_norm, s_bundle.up_proj) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
-            s_situ = situ_glu_forward(s_gate, s_up)
-            shared_out = F.linear(s_situ, s_bundle.down_proj) + bundle.shared_down_lora.forward_lora_only(s_situ)
-            del s_bundle, s_gate, s_up, s_situ
-
-            # Latent MoE projections: load routed_expert_down_proj and routed_expert_up_proj
-            prefix = f"model.layers.{layer_idx}.block_sparse_moe."
-            latent_down_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_down_proj.weight", target_device=self.device)
-            latent_up_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_up_proj.weight", target_device=self.device)
-            latent_norm_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_norm.weight", target_device=self.device)
-            d_h = self.config.model.hidden_size          # 7168
-            d_l = self.config.model.routed_expert_hidden_size  # 3584
+        prefix = f"model.layers.{layer_idx}.block_sparse_moe."
+        latent_down_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_down_proj.weight", target_device=self.device)
+        latent_up_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_up_proj.weight", target_device=self.device)
+        latent_norm_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_norm.weight", target_device=self.device)
+        d_h = self.config.model.hidden_size
+        d_l = self.config.model.routed_expert_hidden_size
+        if latent_down_w is None or latent_up_w is None or latent_norm_w is None:
+            synthetic_allowed(f"layer {layer_idx} latent MoE projections (routed_expert_down/up_proj, routed_expert_norm)")
             if latent_down_w is None:
-                latent_down_w = torch.randn(d_l, d_h, dtype=torch.bfloat16, device=self.device) * 0.01
+                latent_down_w = torch.randn(d_l, d_h, dtype=self.compute_dtype, device=self.device) * 0.01
             if latent_up_w is None:
-                latent_up_w = torch.randn(d_h, d_l, dtype=torch.bfloat16, device=self.device) * 0.01
+                latent_up_w = torch.randn(d_h, d_l, dtype=self.compute_dtype, device=self.device) * 0.01
             if latent_norm_w is None:
-                latent_norm_w = torch.ones(d_l, dtype=torch.bfloat16, device=self.device)
-            if latent_down_w.dtype != torch.bfloat16:
-                latent_down_w = latent_down_w.to(torch.bfloat16)
-            if latent_up_w.dtype != torch.bfloat16:
-                latent_up_w = latent_up_w.to(torch.bfloat16)
+                latent_norm_w = torch.ones(d_l, dtype=self.compute_dtype, device=self.device)
+        latent_down_w = latent_down_w.to(self.compute_dtype)
+        latent_up_w = latent_up_w.to(self.compute_dtype)
 
-            # Project h_moe_norm (7168) → h_latent (3584) for routed experts
-            N, top_k = topk_indices.shape
-            h_flat = h_moe_norm.view(-1, d_h).to(latent_down_w.dtype)
-            h_latent = F.linear(h_flat, latent_down_w)  # [N, 3584]
-            del latent_down_w
+        h_latent = F.linear(x.reshape(-1, d_h).to(self.compute_dtype), latent_down_w)          # [N, 3584]
+        del latent_down_w
+        routed_latent = RoutedExpertsFunction.apply(
+            h_latent, topk_weights, topk_indices, self, layer_idx, bundle, active_experts)
+        routed_latent = RMSNormFunction.forward(routed_latent, latent_norm_w.to(routed_latent.dtype))
+        routed_out = F.linear(routed_latent.to(latent_up_w.dtype), latent_up_w)                  # [N, 7168]
+        del latent_up_w, latent_norm_w
+        return shared_out + routed_out.view_as(shared_out)
 
-            # Run routed experts in latent space (3584 → 3072 → 3584)
-            routed_latent_out = torch.zeros(h_latent.shape[0], d_l, dtype=h_latent.dtype, device=self.device)
+    def _routed_experts_forward(self, layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts):
+        """
+        sum_e w_e(token) * expert_e(h_latent), streaming the experts in disk order.
 
-            # Stream the experts with a background reader keeping the disk busy while the
-            # current expert is being multiplied.
-            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
-                mask = (topk_indices == exp_id)  # [N, top_k]
+        The sum over the 16 experts of a token is accumulated in float32 and returned in
+        float32 (the latent RMSNorm that follows runs on it before the cast back), as the
+        C reference accumulates in double. Summing in bf16 shifts layer outputs by ~1e-3
+        and changes routing decisions a few layers later.
+        """
+        out = torch.zeros(h_latent.shape, dtype=torch.float32, device=h_latent.device)
+        for exp_id, e in self.expert_streamer.stream_experts(layer_idx, active_experts):
+            mask = (topk_indices == exp_id)                                  # [N, top_k]
+            if not mask.any():
+                continue
+            e_gate = F.linear(h_latent, e.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)
+            e_up = F.linear(h_latent, e.up_proj) + bundle.up_lora.forward_lora_only(h_latent)
+            e_situ = situ_glu_forward(e_gate, e_up)
+            e_down = F.linear(e_situ, e.down_proj) + bundle.down_lora.forward_lora_only(e_situ)
+            token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
+            out = out + e_down.float() * token_weights.float()
+            del e, e_gate, e_up, e_situ, e_down
+        return out
+
+    def _routed_experts_backward(self, layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts, grad_out):
+        """
+        Backward of `_routed_experts_forward`: streams the experts a second time, accumulates
+        the LoRA gradients of gate/up/down, and returns (dL/dh_latent, dL/dtopk_weights).
+
+        dL/dtopk_weights is the per-token dot product of the upstream gradient with the
+        expert output, placed in the slot that selected the expert. It lets the gradient
+        reach the (frozen) router's input, as it does in the real model.
+        """
+        grad_h = torch.zeros(h_latent.shape, dtype=torch.float32, device=h_latent.device)
+        grad_w = torch.zeros_like(topk_weights)
+        with torch.no_grad():
+            for exp_id, e in self.expert_streamer.stream_experts(layer_idx, active_experts):
+                mask = (topk_indices == exp_id)
                 if not mask.any():
                     continue
+                gate = F.linear(h_latent, e.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)
+                up = F.linear(h_latent, e.up_proj) + bundle.up_lora.forward_lora_only(h_latent)
+                situ = situ_glu_forward(gate, up)
+                e_down = F.linear(situ, e.down_proj) + bundle.down_lora.forward_lora_only(situ)
 
-                e_gate = F.linear(h_latent, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)   # [N, 3072]
-                e_up = F.linear(h_latent, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_latent)        # [N, 3072]
-                e_situ = situ_glu_forward(e_gate, e_up)
-                e_down = F.linear(e_situ, e_bundle.down_proj) + bundle.down_lora.forward_lora_only(e_situ)      # [N, 3584]
-                del e_bundle, e_gate, e_up, e_situ
+                dot = (grad_out.float() * e_down.float()).sum(dim=-1, keepdim=True)   # [N, 1]
+                grad_w = grad_w + (dot * mask.to(dot.dtype)).to(grad_w.dtype)
 
                 token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
-                routed_latent_out = routed_latent_out + e_down * token_weights
-                del e_down
+                d_down = (grad_out.float() * token_weights.float()).to(h_latent.dtype)
 
-            # Apply latent norm then project back: (3584) → (7168)
-            # Norm weights ship as float32 in some shards; keep the whole path in bfloat16.
-            routed_latent_out = RMSNormFunction.forward(routed_latent_out, latent_norm_w.to(routed_latent_out.dtype))
-            routed_out = F.linear(routed_latent_out.to(latent_up_w.dtype), latent_up_w)  # [N, 7168]
-            del latent_up_w, latent_norm_w, routed_latent_out, h_latent
+                gA, gB, d_situ = bundle.down_lora.compute_lora_gradients(d_down, situ, e.down_proj)
+                bundle.down_lora.accumulate_grad(gA, gB)
+                d_gate, d_up = situ_glu_backward(d_situ, gate, up)
+                gA, gB, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_latent, e.gate_proj)
+                bundle.gate_lora.accumulate_grad(gA, gB)
+                gA, gB, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_latent, e.up_proj)
+                bundle.up_lora.accumulate_grad(gA, gB)
+                grad_h = grad_h + (d_in_g.float() + d_in_u.float())
+                del e, gate, up, situ, e_down, d_down, d_situ, d_gate, d_up, d_in_g, d_in_u
+        return grad_h.to(h_latent.dtype), grad_w
 
-            moe_out = shared_out + routed_out.view_as(h_mid)
-            h_out = self._add_to_prefix(prefix_sum, moe_out)
+    def _lora_params_of(self, bundle) -> List[Tuple[Any, "torch.Tensor"]]:
+        """(module, parameter) pairs for every LoRA tensor in a layer bundle."""
+        out = []
+        for _, mod in bundle.all_modules():
+            for p in (mod.lora_A, mod.lora_B):
+                if p is not None:
+                    out.append((mod, p))
+        return out
+
+    @staticmethod
+    def _accumulate_param_grad(p, g) -> None:
+        if g is None:
+            return
+        g = g.detach().to(p.dtype)
+        if p.grad is None:
+            p.grad = g.clone()
         else:
-            # NumPy path
-            # Shared expert
-            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
-            s_gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
-            s_up = np.matmul(h_moe_norm, s_bundle.up_proj.T) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
-            s_situ = situ_glu_forward(s_gate, s_up)
-            shared_out = np.matmul(s_situ, s_bundle.down_proj.T) + bundle.shared_down_lora.forward_lora_only(s_situ)
-
-            # Latent MoE projections
-            d_h = self.config.model.hidden_size
-            d_l = self.config.model.routed_expert_hidden_size
-            h_flat = h_moe_norm.reshape(-1, d_h)
-            latent_down_w = (np.random.randn(d_l, d_h) * 0.01).astype(np.float32)
-            latent_up_w = (np.random.randn(d_h, d_l) * 0.01).astype(np.float32)
-            h_latent = np.matmul(h_flat, latent_down_w.T)
-
-            routed_latent_out = np.zeros((h_latent.shape[0], d_l), dtype=np.float32)
-            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
-                mask = (topk_indices == exp_id)
-                if not np.any(mask):
-                    continue
-                e_gate = np.matmul(h_latent, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_latent)
-                e_up = np.matmul(h_latent, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_latent)
-                e_situ = situ_glu_forward(e_gate, e_up)
-                e_down = np.matmul(e_situ, e_bundle.down_proj.T) + bundle.down_lora.forward_lora_only(e_situ)
-
-                token_weights = np.sum(topk_weights * mask.astype(np.float32), axis=-1, keepdims=True)
-                routed_latent_out = routed_latent_out + e_down * token_weights
-
-            routed_out = np.matmul(routed_latent_out, latent_up_w.T)
-
-            moe_out = shared_out + routed_out.reshape(h_mid.shape)
-            h_out = self._add_to_prefix(prefix_sum, moe_out)
-
-        # 5. Evict layer expert weights from memory
-        self.expert_streamer.evict_layer_experts(layer_idx)
-
-        return h_out, active_experts
-
-    def _dense_layer_backward(self, layer_idx, bundle, trunk, h_in, grad_h_out, is_torch):
-        """Backward for a dense (non-MoE) layer: MLP LoRA grads, then attention q/v LoRA grads."""
-        # Recompute attention forward to reach h_mid
-        h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
-        attn_out = self._attention_forward(layer_idx, bundle, h_norm1)
-        h_mid = h_in + attn_out
-
-        # Recompute the MLP sublayer states
-        h_norm2 = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-        gate_w, up_w, down_w = self._load_dense_mlp(layer_idx)
-        if is_torch and h_norm2.dtype != gate_w.dtype:
-            h_norm2 = h_norm2.to(gate_w.dtype)
-
-        if is_torch:
-            gate = F.linear(h_norm2, gate_w) + bundle.dense_gate_lora.forward_lora_only(h_norm2)
-            up = F.linear(h_norm2, up_w) + bundle.dense_up_lora.forward_lora_only(h_norm2)
-        else:
-            gate = np.matmul(h_norm2, gate_w.T) + bundle.dense_gate_lora.forward_lora_only(h_norm2)
-            up = np.matmul(h_norm2, up_w.T) + bundle.dense_up_lora.forward_lora_only(h_norm2)
-        situ = situ_glu_forward(gate, up)
-
-        grad_h_mid = grad_h_out.clone() if is_torch else grad_h_out.copy().reshape(h_mid.shape)
-
-        gA_d, gB_d, d_situ = bundle.dense_down_lora.compute_lora_gradients(grad_h_out, situ, down_w)
-        bundle.dense_down_lora.accumulate_grad(gA_d, gB_d)
-
-        if d_situ is not None:
-            d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-            gA_g, gB_g, d_in_g = bundle.dense_gate_lora.compute_lora_gradients(d_gate, h_norm2, gate_w)
-            bundle.dense_gate_lora.accumulate_grad(gA_g, gB_g)
-
-            gA_u, gB_u, d_in_u = bundle.dense_up_lora.compute_lora_gradients(d_up, h_norm2, up_w)
-            bundle.dense_up_lora.accumulate_grad(gA_u, gB_u)
-
-            if d_in_g is not None and d_in_u is not None:
-                contrib = d_in_g + d_in_u
-                if is_torch:
-                    grad_h_mid = grad_h_mid + contrib.view_as(grad_h_mid)
-                else:
-                    grad_h_mid = grad_h_mid + contrib.reshape(grad_h_mid.shape)
-        del gate_w, up_w, down_w, gate, up, situ
-
-        # Attention sublayer backward through the real KDA / MLA sublayer
-        grad_h_in = grad_h_mid.clone() if is_torch else grad_h_mid.copy()
-        grad_attn_in = self._attention_backward(layer_idx, bundle, h_norm1, grad_h_mid)
-        if grad_attn_in is not None:
-            grad_h_in = grad_h_in + (
-                grad_attn_in.view_as(grad_h_in) if is_torch else grad_attn_in.reshape(grad_h_in.shape)
-            )
-        return grad_h_in
+            p.grad.add_(g)
 
     def backward_layer(
         self,
         layer_idx: int,
-        grad_h_out: Union["torch.Tensor", np.ndarray],
-    ) -> Union["torch.Tensor", np.ndarray]:
+        grad_h_out: "torch.Tensor",
+    ) -> "torch.Tensor":
         """
-        Executes out-of-core backward pass for a single layer:
-        1. Loads h_in from D: drive activation ring buffer.
-        2. Recomputes intermediate forward states for layer_idx.
-        3. Computes analytical gradients for all LoRA matrices (down, gate, up, q, v).
-        4. Accumulates gradients into bundle LoRA parameters.
-        5. Computes and returns downstream gradient grad_h_in to propagate to preceding layer.
-        6. Evicts layer weights immediately from RAM/VRAM.
+        Out-of-core backward for one layer.
+
+        Loads h_in and the bank the layer saw from the activation ring buffer, replays
+        `_run_layer` under autograd with h_in, the bank and this layer's LoRA tensors as
+        leaves, and reads the gradients off it. The routed experts are handled inside
+        RoutedExpertsFunction (their LoRA gradients are accumulated there). Gradient into
+        bank entries is parked in `_grad_bank` and delivered to the boundary layer that
+        owns the entry when the sweep reaches it; at a boundary layer, its own parked
+        gradient is added to grad_h_in.
         """
-        is_torch = HAS_TORCH and isinstance(grad_h_out, torch.Tensor)
-        h_in = self.act_buffer.load_activation(layer_idx, target_device=self.device, as_torch=is_torch)
+        if not (HAS_TORCH and isinstance(grad_h_out, torch.Tensor)):
+            raise RuntimeError("the LazyLoRA engine runs on torch tensors; the NumPy path was removed")
+        h_in = self.act_buffer.load_activation(layer_idx, target_device=self.device, as_torch=True)
         if h_in is None:
-            return grad_h_out
-
-        trunk = self.trunk_streamer.load_layer_trunk(layer_idx)
+            raise RuntimeError(f"activation of layer {layer_idx} is missing from the ring buffer")
+        bank = self._bank_at_entry(layer_idx, h_in)
         bundle = self.lora_layers[layer_idx]
+        mods_params = self._lora_params_of(bundle)
+        params = [p for _, p in mods_params]
 
-        if bundle.is_dense:
-            grad_h_in = self._dense_layer_backward(layer_idx, bundle, trunk, h_in, grad_h_out, is_torch)
-            self.trunk_streamer.release_layer_trunk()
-            return grad_h_in
+        with torch.enable_grad():
+            x = h_in.detach().clone().requires_grad_(True)
+            leaves = [x]
+            b = None
+            if bank is not None:
+                b = bank.detach().clone().requires_grad_(True)
+                leaves.append(b)
+            out, _ = self._run_layer(layer_idx, x, b)
+            grads = torch.autograd.grad(
+                outputs=out, inputs=leaves + params,
+                grad_outputs=grad_h_out.to(out.dtype),
+                allow_unused=True, retain_graph=False,
+            )
+        del out
+        grad_x = grads[0]
+        grad_b = grads[1] if b is not None else None
+        for (mod, p), g in zip(mods_params, grads[len(leaves):]):
+            self._accumulate_param_grad(p, g)
 
-        if is_torch:
-            # Recompute Attention forward
-            h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
-            attn_out = self._attention_forward(layer_idx, bundle, h_norm1)
-            h_mid = h_in + attn_out
+        grad_h_in = grad_x.detach() if grad_x is not None else torch.zeros_like(h_in)
+        if grad_b is not None:
+            for j, l_entry in enumerate(self._bank_entries_before(layer_idx)):
+                piece = grad_b[:, j].detach().view_as(grad_h_in)
+                prev = self._grad_bank.get(l_entry)
+                self._grad_bank[l_entry] = piece.clone() if prev is None else prev + piece
+        if self._is_boundary(layer_idx) and layer_idx in self._grad_bank:
+            grad_h_in = grad_h_in + self._grad_bank.pop(layer_idx).to(grad_h_in.dtype)
 
-            # Recompute MoE forward states
-            h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-            topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
-            active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
-
-            # MoE Backward (Kimi K3 Latent MoE), mirroring the forward pass exactly:
-            #   shared expert : 7168 -> 6144 -> 7168   (LoRA on gate/up/down)
-            #   routed experts: 3584 -> 3072 -> 3584   (LoRA on gate/up/down, latent space)
-            grad_h_mid = grad_h_out.clone()
-            grad_moe_norm = torch.zeros_like(h_moe_norm)
-
-            # 1. Shared expert backward (single module, dense path)
-            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
-            if h_moe_norm.dtype != s_bundle.gate_proj.dtype:
-                h_moe_norm = h_moe_norm.to(s_bundle.gate_proj.dtype)
-            gate = F.linear(h_moe_norm, s_bundle.gate_proj) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
-            up = F.linear(h_moe_norm, s_bundle.up_proj) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
-            situ = situ_glu_forward(gate, up)
-
-            gA_d, gB_d, d_situ = bundle.shared_down_lora.compute_lora_gradients(grad_h_out, situ, s_bundle.down_proj)
-            bundle.shared_down_lora.accumulate_grad(gA_d, gB_d)
-
-            if d_situ is not None:
-                d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                gA_g, gB_g, d_in_g = bundle.shared_gate_lora.compute_lora_gradients(d_gate, h_moe_norm, s_bundle.gate_proj)
-                bundle.shared_gate_lora.accumulate_grad(gA_g, gB_g)
-
-                gA_u, gB_u, d_in_u = bundle.shared_up_lora.compute_lora_gradients(d_up, h_moe_norm, s_bundle.up_proj)
-                bundle.shared_up_lora.accumulate_grad(gA_u, gB_u)
-
-                if d_in_g is not None and d_in_u is not None:
-                    grad_moe_norm.add_(d_in_g + d_in_u)
-            del s_bundle, gate, up, situ
-
-            # 2. Routed experts backward, in the 3584-dim latent space
-            d_h = self.config.model.hidden_size
-            d_l = self.config.model.routed_expert_hidden_size
-            prefix = f"model.layers.{layer_idx}.block_sparse_moe."
-            latent_down_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_down_proj.weight", target_device=self.device)
-            latent_up_w = self.mmap_streamer.load_tensor(f"{prefix}routed_expert_up_proj.weight", target_device=self.device)
-            if latent_down_w is None:
-                latent_down_w = torch.randn(d_l, d_h, dtype=torch.bfloat16, device=self.device) * 0.01
-            if latent_up_w is None:
-                latent_up_w = torch.randn(d_h, d_l, dtype=torch.bfloat16, device=self.device) * 0.01
-            latent_down_w = latent_down_w.to(torch.bfloat16)
-            latent_up_w = latent_up_w.to(torch.bfloat16)
-
-            h_flat = h_moe_norm.view(-1, d_h).to(latent_down_w.dtype)
-            h_latent = F.linear(h_flat, latent_down_w)                       # [N, 3584]
-            grad_flat = grad_h_out.view(-1, d_h).to(latent_up_w.dtype)
-            # Back through routed_expert_up_proj (latent RMSNorm jacobian approximated as identity)
-            grad_latent_out = F.linear(grad_flat, latent_up_w.t())           # [N, 3584]
-            grad_latent_in = torch.zeros_like(h_latent)
-
-            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
-                mask = (topk_indices == exp_id)
-                if not mask.any():
-                    continue
-                gate = F.linear(h_latent, e_bundle.gate_proj) + bundle.gate_lora.forward_lora_only(h_latent)
-                up = F.linear(h_latent, e_bundle.up_proj) + bundle.up_lora.forward_lora_only(h_latent)
-                situ = situ_glu_forward(gate, up)
-
-                token_weights = (topk_weights * mask.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
-                token_weights = token_weights.view(-1, 1).to(grad_latent_out.dtype)
-                d_down_weighted = grad_latent_out * token_weights            # [N, 3584]
-
-                gA_d, gB_d, d_situ = bundle.down_lora.compute_lora_gradients(d_down_weighted, situ, e_bundle.down_proj)
-                bundle.down_lora.accumulate_grad(gA_d, gB_d)
-
-                if d_situ is not None:
-                    d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_latent, e_bundle.gate_proj)
-                    bundle.gate_lora.accumulate_grad(gA_g, gB_g)
-
-                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_latent, e_bundle.up_proj)
-                    bundle.up_lora.accumulate_grad(gA_u, gB_u)
-
-                    if d_in_g is not None and d_in_u is not None:
-                        grad_latent_in.add_(d_in_g + d_in_u)
-                del e_bundle, gate, up, situ
-
-            # Back through routed_expert_down_proj: latent (3584) -> hidden (7168)
-            grad_moe_norm.add_(F.linear(grad_latent_in, latent_down_w.t()).view_as(h_moe_norm))
-            del latent_down_w, latent_up_w, h_latent, grad_latent_in, grad_latent_out
-
-            grad_h_mid.add_(grad_moe_norm)
-
-            # Attention Sublayer Backward, through the real KDA / MLA sublayer
-            grad_h_in = grad_h_mid.clone()
-            grad_attn_in = self._attention_backward(layer_idx, bundle, h_norm1, grad_h_mid)
-            if grad_attn_in is not None:
-                grad_h_in.add_(grad_attn_in.view_as(grad_h_in))
-        else:
-            # NumPy analytical backward
-            orig_shape = h_in.shape
-            h_norm1 = RMSNormFunction.forward(h_in, trunk.input_layernorm)
-            attn_out = self._attention_forward(layer_idx, bundle, h_norm1)
-            h_mid = h_in + attn_out
-
-            h_moe_norm = RMSNormFunction.forward(h_mid, trunk.post_attention_layernorm)
-            topk_indices, topk_weights = self._route(layer_idx, h_moe_norm)
-            active_experts = self.expert_streamer.sort_by_disk_order(layer_idx, self.router.get_active_expert_set(topk_indices))
-
-            # MoE Backward: same structure as the torch path (shared dense expert +
-            # routed experts in the 3584-dim latent space), full LoRA coverage.
-            grad_h_mid = grad_h_out.copy().reshape(orig_shape)
-            grad_moe_norm = np.zeros(orig_shape, dtype=np.float32)
-
-            s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
-            gate = np.matmul(h_moe_norm, s_bundle.gate_proj.T) + bundle.shared_gate_lora.forward_lora_only(h_moe_norm)
-            up = np.matmul(h_moe_norm, s_bundle.up_proj.T) + bundle.shared_up_lora.forward_lora_only(h_moe_norm)
-            situ = situ_glu_forward(gate, up)
-
-            gA_d, gB_d, d_situ = bundle.shared_down_lora.compute_lora_gradients(grad_h_mid, situ, s_bundle.down_proj)
-            bundle.shared_down_lora.accumulate_grad(gA_d, gB_d)
-
-            if d_situ is not None:
-                d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                gA_g, gB_g, d_in_g = bundle.shared_gate_lora.compute_lora_gradients(d_gate, h_moe_norm, s_bundle.gate_proj)
-                bundle.shared_gate_lora.accumulate_grad(gA_g, gB_g)
-
-                gA_u, gB_u, d_in_u = bundle.shared_up_lora.compute_lora_gradients(d_up, h_moe_norm, s_bundle.up_proj)
-                bundle.shared_up_lora.accumulate_grad(gA_u, gB_u)
-
-                if d_in_g is not None and d_in_u is not None:
-                    grad_moe_norm += (d_in_g + d_in_u).reshape(orig_shape)
-
-            d_h = self.config.model.hidden_size
-            d_l = self.config.model.routed_expert_hidden_size
-            latent_down_w = (np.random.randn(d_l, d_h) * 0.01).astype(np.float32)
-            latent_up_w = (np.random.randn(d_h, d_l) * 0.01).astype(np.float32)
-
-            h_flat = h_moe_norm.reshape(-1, d_h)
-            h_latent = np.matmul(h_flat, latent_down_w.T)
-            grad_flat = grad_h_mid.reshape(-1, d_h)
-            grad_latent_out = np.matmul(grad_flat, latent_up_w)
-            grad_latent_in = np.zeros_like(h_latent)
-
-            for exp_id, e_bundle in self.expert_streamer.stream_experts(layer_idx, active_experts):
-                mask = (topk_indices == exp_id)
-                if not np.any(mask):
-                    continue
-                gate = np.matmul(h_latent, e_bundle.gate_proj.T) + bundle.gate_lora.forward_lora_only(h_latent)
-                up = np.matmul(h_latent, e_bundle.up_proj.T) + bundle.up_lora.forward_lora_only(h_latent)
-                situ = situ_glu_forward(gate, up)
-
-                token_weights = np.sum(topk_weights * mask.astype(np.float32), axis=-1, keepdims=True).reshape(-1, 1)
-                d_down_weighted = grad_latent_out * token_weights
-
-                gA_d, gB_d, d_situ = bundle.down_lora.compute_lora_gradients(d_down_weighted, situ, e_bundle.down_proj)
-                bundle.down_lora.accumulate_grad(gA_d, gB_d)
-
-                if d_situ is not None:
-                    d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                    gA_g, gB_g, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, h_latent, e_bundle.gate_proj)
-                    bundle.gate_lora.accumulate_grad(gA_g, gB_g)
-
-                    gA_u, gB_u, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, h_latent, e_bundle.up_proj)
-                    bundle.up_lora.accumulate_grad(gA_u, gB_u)
-
-                    if d_in_g is not None and d_in_u is not None:
-                        grad_latent_in += d_in_g + d_in_u
-
-            grad_moe_norm += np.matmul(grad_latent_in, latent_down_w).reshape(orig_shape)
-            grad_h_mid += grad_moe_norm
-
-            grad_h_in = grad_h_mid.copy()
-            grad_attn_in = self._attention_backward(layer_idx, bundle, h_norm1, grad_h_mid)
-            if grad_attn_in is not None:
-                grad_h_in += np.asarray(grad_attn_in, dtype=grad_h_in.dtype).reshape(orig_shape)
-
-        self.trunk_streamer.release_layer_trunk()
         self.expert_streamer.evict_layer_experts(layer_idx)
-
         return grad_h_in
+
+    def _finalize_backward(self, h_last, grad_final):
+        """Gradient through the output bank mix and the final RMSNorm, into h_last and the bank."""
+        num_layers = self.config.model.num_hidden_layers
+        bank = self._bank_at_entry(num_layers, h_last)
+        with torch.enable_grad():
+            x = h_last.detach().clone().requires_grad_(True)
+            leaves = [x]
+            b = None
+            if bank is not None:
+                b = bank.detach().clone().requires_grad_(True)
+                leaves.append(b)
+            out = self._finalize_hidden(x, b)
+            grads = torch.autograd.grad(out, leaves, grad_outputs=grad_final.to(out.dtype), allow_unused=True)
+        grad_x = grads[0].detach() if grads[0] is not None else torch.zeros_like(h_last)
+        if b is not None and grads[1] is not None:
+            for j, l_entry in enumerate(self._bank_entries_before(num_layers)):
+                piece = grads[1][:, j].detach().view_as(grad_x)
+                prev = self._grad_bank.get(l_entry)
+                self._grad_bank[l_entry] = piece.clone() if prev is None else prev + piece
+        return grad_x
 
     def _report_forward_loss(self, step: int, loss_val) -> None:
         """Print and persist the forward loss as soon as it is computed."""
@@ -1016,7 +874,8 @@ class LazyLoRATrainer:
 
             print(f"\r  ⚡ [FORWARD COMPLETE] (93 Layers) -> Computing LM Head Cross-Entropy Loss...", end="", flush=True)
             # 3. Close the residual bank, final norm, LM head projection and loss
-            h_current = self._finalize_hidden(h_current)
+            h_last = h_current
+            h_current = self._finalize_hidden(h_last, self._block_residual)
             logits = self._project_lm_head(h_current)
             loss_val, grad_logits = compute_cross_entropy_loss(
                 logits,
@@ -1031,8 +890,10 @@ class LazyLoRATrainer:
 
             if not getattr(self, "forward_only", False):
                 # 4. Out-of-Core Real Reverse Backward Pass (Layer L-1 -> Layer 0)
-                # Backprop through LM head projection (streamed band by band)
+                # Backprop through LM head projection (streamed band by band), then through
+                # the output bank mix and final norm
                 grad_h = self._lm_head_backward(grad_logits)
+                grad_h = self._finalize_backward(h_last, grad_h)
 
                 # Sequential reverse backward pass through all 93 layers reading activations from D: SSD
                 for l in range(num_layers - 1, -1, -1):
@@ -1072,10 +933,17 @@ class LazyLoRATrainer:
 
         return loss_scalar
 
-    def save_lora_checkpoint(self, step: int) -> str:
-        """Save trained LoRA weights to D: drive checkpoint directory."""
+    def save_lora_checkpoint(self, step: int, data_cursor: int = 0) -> str:
+        """
+        Write a complete, atomic checkpoint.
+
+        Contains the LoRA tensors, the optimizer moments and step counter, the LR schedule,
+        the RNG states and the dataset cursor, so a resumed run continues the same
+        trajectory. The file is written to a temporary name and renamed into place, so a
+        crash mid-write never leaves a half checkpoint under the final name.
+        """
         ckpt_path = os.path.join(self.config.paths.checkpoints_dir, f"lazy_lora_step_{step:05d}.pt")
-        
+
         state_dict = {}
         for l, bundle in enumerate(self.lora_layers):
             for name, mod in bundle.all_modules():
@@ -1089,19 +957,69 @@ class LazyLoRATrainer:
                         state_dict[key_A] = mod.lora_A
                         state_dict[key_B] = mod.lora_B
 
-        # Save binary
-        if HAS_TORCH:
-            torch.save(state_dict, ckpt_path)
-        else:
+        if not HAS_TORCH:
             np.savez_compressed(ckpt_path.replace(".pt", ".npz"), **state_dict)
+            return ckpt_path.replace(".pt", ".npz")
 
+        from dataclasses import asdict
+        payload = {
+            "format": 2,
+            "step": int(step),
+            "data_cursor": int(data_cursor),
+            "lora": state_dict,
+            "optimizer": self.optimizer.state_dict(),
+            "rng": {"torch": torch.get_rng_state(), "numpy": np.random.get_state()},
+            "config": {"lora": asdict(self.config.lora), "training": asdict(self.config.training)},
+        }
+        os.makedirs(os.path.dirname(ckpt_path), exist_ok=True)
+        tmp_path = ckpt_path + ".tmp"
+        with open(tmp_path, "wb") as f:
+            torch.save(payload, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, ckpt_path)
+        try:
+            with open(os.path.join(self.config.paths.checkpoints_dir, "latest.txt"), "w") as f:
+                f.write(os.path.basename(ckpt_path) + "\n")
+        except OSError:
+            pass
         return ckpt_path
 
-    def train(self, num_steps: Optional[int] = None) -> List[float]:
+    def load_checkpoint(self, path: str) -> Dict[str, Any]:
+        """Restore LoRA tensors, optimizer state and RNG from a checkpoint; returns its metadata."""
+        payload = torch.load(path, map_location="cpu", weights_only=False)
+        if not isinstance(payload, dict) or "lora" not in payload:
+            # A bare LoRA state dict (format 1): weights only, nothing else to restore.
+            payload = {"format": 1, "step": 0, "data_cursor": 0, "lora": payload}
+        lora = payload["lora"]
+        missing = []
+        with torch.no_grad():
+            for l, bundle in enumerate(self.lora_layers):
+                for name, mod in bundle.all_modules():
+                    for ab, p in (("lora_A", mod.lora_A), ("lora_B", mod.lora_B)):
+                        key = f"layers.{l}.{name}.{ab}"
+                        if key in lora:
+                            p.copy_(lora[key].to(p.dtype))
+                        else:
+                            missing.append(key)
+        if missing:
+            raise RuntimeError(f"checkpoint {path} lacks {len(missing)} LoRA tensors, e.g. {missing[:3]}")
+        if "optimizer" in payload:
+            self.optimizer.load_state_dict(payload["optimizer"])
+        rng = payload.get("rng")
+        if rng:
+            torch.set_rng_state(rng["torch"])
+            np.random.set_state(rng["numpy"])
+        return {"step": int(payload.get("step", 0)), "data_cursor": int(payload.get("data_cursor", 0)),
+                "format": payload.get("format", 1)}
+
+    def train(self, num_steps: Optional[int] = None, resume_from: Optional[str] = None) -> List[float]:
         """
         Executes full LazyLoRA Out-of-Core training loop.
         Streams Turkish training dataset, processes micro-batches, updates weights,
-        renders real-time dashboard, and periodically saves checkpoints.
+        renders real-time dashboard, and periodically saves checkpoints. With
+        `resume_from`, restores that checkpoint (weights, optimizer, RNG, data cursor)
+        and continues from its step.
         """
         from lazy_lora.dataset.turkish_dataset import TurkishDatasetManager
         from lazy_lora.dataset.stream_dataset import StreamingDatasetIterator
@@ -1130,30 +1048,46 @@ class LazyLoRATrainer:
         print("=" * 82)
 
         step = 0
+        data_cursor = 0
         loss_history = []
+        if resume_from:
+            meta = self.load_checkpoint(resume_from)
+            step, data_cursor = meta["step"], meta["data_cursor"]
+            print(f"  ↩ [RESUMED] {resume_from}: step {step}, data cursor {data_cursor}")
 
         while step < target_steps:
+            skip = data_cursor
+            data_cursor = 0
+            saw_batch = False
             for input_ids, target_ids in iterator.get_batches(
                 batch_size=self.config.training.micro_batch_size,
                 as_torch=HAS_TORCH,
                 device=self.device,
+                skip_samples=skip,
             ):
+                saw_batch = True
                 step += 1
                 loss_val = self.train_step(step=step, input_ids=input_ids, target_ids=target_ids)
                 loss_history.append(loss_val)
+                data_cursor = iterator.samples_consumed
 
                 if step % self.config.training.save_steps == 0:
-                    saved_path = self.save_lora_checkpoint(step)
+                    saved_path = self.save_lora_checkpoint(step, data_cursor)
                     print(f"\n💾 [CHECKPOINT SAVED] Step {step:05d} -> {saved_path}")
 
                 if step >= target_steps:
                     break
+            if not saw_batch and skip:
+                data_cursor = 0          # the cursor pointed past the end: start a new epoch
+            elif not saw_batch:
+                raise RuntimeError(f"no training samples in {train_file}")
 
-        final_ckpt = self.save_lora_checkpoint(step)
+        final_ckpt = self.save_lora_checkpoint(step, data_cursor)
         print("\n" + "=" * 82)
         print(f"🎉 [TRAINING COMPLETE] {step} Steps Executed Successfully!")
         print(f" Final LoRA Adapter Checkpoint: {final_ckpt}")
         print("=" * 82)
+        self.close()
         return loss_history
 
 
@@ -1167,6 +1101,8 @@ def main():
                         help="Sequence length (shorter runs cost proportionally less disk time)")
     parser.add_argument("--forward-only", action="store_true",
                         help="Run the forward pass and report the loss, without backward or optimizer")
+    parser.add_argument("--resume", default=None,
+                        help="Checkpoint to resume from (weights, optimizer, RNG and data cursor)")
     args = parser.parse_args()
 
     cfg = get_default_config()
@@ -1181,7 +1117,7 @@ def main():
 
     trainer = LazyLoRATrainer(config=cfg)
     trainer.forward_only = args.forward_only
-    trainer.train(num_steps=args.steps)
+    trainer.train(num_steps=args.steps, resume_from=args.resume)
 
 
 if __name__ == "__main__":

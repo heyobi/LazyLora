@@ -59,8 +59,12 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
         lora_alpha: int = 32,
         lora_dropout: float = 0.0,
         device: str = "cpu",
-        dtype: str = "bfloat16",
+        dtype: str = "float32",
     ):
+        # The adapters are float32 (report finding K2): a bf16 parameter carries ~3
+        # significant digits, so an Adam step of 2e-4 on a 0.05 weight sits at its
+        # rounding threshold and most later updates round to zero. The forward casts the
+        # low-rank delta back to the activation dtype, so the base path stays bf16.
         self.in_features = in_features
         self.out_features = out_features
         self.r = r
@@ -208,8 +212,9 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
             # Downstream grad to input: dx = dy @ W_0 + dh @ A
             grad_input = None
             if base_weight is not None:
-                bw = base_weight.to(target_dtype) if base_weight.dtype != target_dtype else base_weight
-                dx_base = F.linear(dy_flat, bw.t())
+                # dy @ W_0 in the base weight's own dtype: widening a 3072x3584 expert
+                # matrix to fp32 for every expert would cost more than the matmul itself.
+                dx_base = F.linear(grad_output.view(-1, self.out_features).to(base_weight.dtype), base_weight.t()).to(target_dtype)
                 dx_lora = F.linear(dh, self.lora_A.t())
                 grad_input = (dx_base + dx_lora).view_as(input_activation)
                 if grad_input.dtype != input_activation.dtype:

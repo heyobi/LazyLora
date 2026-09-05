@@ -11,6 +11,8 @@ import struct
 from typing import Dict, Any, Optional, Tuple, List, Union
 import numpy as np
 
+from lazy_lora.core.config import default_cache_dir
+
 try:
     import torch
     HAS_TORCH = True
@@ -37,6 +39,9 @@ class SafetensorsIndex:
     def __init__(self, model_dir: str):
         self.model_dir = model_dir
         self.tensor_locations: Dict[str, Tuple[str, int, int, List[int], str]] = {}
+        # Shards that exist by name but could not be indexed (empty, truncated, bad header).
+        # A zero-byte shard is exactly how two whole layers went missing unnoticed once.
+        self.bad_shards: List[str] = []
         self._index_built = False
         if os.path.isdir(model_dir):
             self.build_index()
@@ -49,25 +54,31 @@ class SafetensorsIndex:
         """
         import hashlib
         key = hashlib.sha1(os.path.abspath(self.model_dir).encode("utf-8")).hexdigest()[:16]
-        return f"/mnt/d/hamza/LazyLora_Workspace/cache/safetensors_index_{key}.json"
+        return os.path.join(default_cache_dir(), f"safetensors_index_{key}.json")
 
     def build_index(self) -> None:
         """Scan directory and parse JSON headers of all .safetensors files."""
         cache_file = self._cache_file()
-        if os.path.exists(cache_file):
-            try:
-                with open(cache_file, "r", encoding="utf-8") as f:
-                    cached_data = json.load(f)
-                    self.tensor_locations = {k: tuple(v) for k, v in cached_data.items()}
-                self._index_built = True
-                return
-            except Exception:
-                pass
-
         shard_files = sorted([
             f for f in os.listdir(self.model_dir)
             if f.endswith(".safetensors")
         ])
+        # The cache is only valid for the exact set of shard files and sizes it was built
+        # from; a re-downloaded or truncated shard invalidates it.
+        fingerprint = {f: os.path.getsize(os.path.join(self.model_dir, f)) for f in shard_files}
+        if os.path.exists(cache_file):
+            try:
+                with open(cache_file, "r", encoding="utf-8") as f:
+                    cached = json.load(f)
+                if cached.get("fingerprint") == fingerprint:
+                    self.tensor_locations = {k: tuple(v) for k, v in cached["tensors"].items()}
+                    self.bad_shards = list(cached.get("bad_shards", []))
+                    self._index_built = True
+                    self._warn_bad_shards()
+                    return
+            except Exception:
+                pass
+
 
         for shard in shard_files:
             shard_path = os.path.join(self.model_dir, shard)
@@ -76,9 +87,11 @@ class SafetensorsIndex:
                     # Read first 8 bytes (little-endian uint64 header size)
                     header_len_bytes = f.read(8)
                     if len(header_len_bytes) < 8:
+                        self.bad_shards.append(shard)
                         continue
                     header_len = struct.unpack("<Q", header_len_bytes)[0]
                     if header_len > 100 * 1024 * 1024:  # Sanity check < 100MB
+                        self.bad_shards.append(shard)
                         continue
                     header_json_bytes = f.read(header_len)
                     header = json.loads(header_json_bytes.decode("utf-8"))
@@ -100,16 +113,25 @@ class SafetensorsIndex:
                             dtype_str,
                         )
             except Exception:
+                self.bad_shards.append(shard)
                 continue
 
         try:
             os.makedirs(os.path.dirname(cache_file), exist_ok=True)
             with open(cache_file, "w", encoding="utf-8") as f:
-                json.dump(self.tensor_locations, f)
+                json.dump({"fingerprint": fingerprint, "bad_shards": self.bad_shards,
+                           "tensors": self.tensor_locations}, f)
         except Exception:
             pass
 
         self._index_built = True
+        self._warn_bad_shards()
+
+    def _warn_bad_shards(self) -> None:
+        if self.bad_shards:
+            print(f"[!] {len(self.bad_shards)} shard(s) in {self.model_dir} could not be indexed "
+                  f"(empty, truncated or unreadable): {', '.join(self.bad_shards)}. Every tensor "
+                  f"they hold is missing; run scripts/check_shards.py.", flush=True)
 
     def _resolve_name(self, tensor_name: str) -> Optional[str]:
         if tensor_name in self.tensor_locations:
@@ -155,9 +177,14 @@ class MmapTensorStreamer:
     map, but nothing on the hot path uses it.
     """
 
-    def __init__(self, model_dir: str):
+    def __init__(self, model_dir: str, upcast_float32: Optional[bool] = None):
         self.model_dir = model_dir
         self.index = SafetensorsIndex(model_dir)
+        # LAZYLORA_COMPUTE_FP32=1 widens every bf16/f16 tensor to float32 as it is read, so
+        # the whole engine runs in fp32. Slow and memory-hungry, but it is what makes a
+        # finite-difference gradient check meaningful (bf16 rounding is ~4e-3 relative).
+        self.upcast_float32 = (os.environ.get("LAZYLORA_COMPUTE_FP32", "") == "1"
+                               if upcast_float32 is None else bool(upcast_float32))
         self._mmap_handles: Dict[str, Tuple[mmap.mmap, int]] = {}  # shard_path -> (mmap_obj, fd)
         self._fds: Dict[str, int] = {}
         # Running total of tensor bytes pulled off disk, so the dashboard can report the
@@ -223,10 +250,15 @@ class MmapTensorStreamer:
             else:
                 t = torch.from_numpy(arr.copy())
 
+            if self.upcast_float32 and t.dtype in (torch.bfloat16, torch.float16):
+                t = t.float()
             if target_device != "cpu" and torch.cuda.is_available():
                 t = t.to(target_device, non_blocking=True)
             return t
         else:
+            if dtype_str == "BF16":
+                # bf16 is the top half of an f32; widen so NumPy callers get real values
+                return (arr.astype(np.uint32) << 16).view(np.float32)
             return arr
 
     def load_tensor_rows(
@@ -267,6 +299,8 @@ class MmapTensorStreamer:
             t = torch.from_numpy(out)
             if dtype_str == "BF16":
                 t = t.view(torch.bfloat16)
+            if self.upcast_float32 and t.dtype in (torch.bfloat16, torch.float16):
+                t = t.float()
             if target_device != "cpu" and torch.cuda.is_available():
                 t = t.to(target_device, non_blocking=True)
             return t
@@ -311,6 +345,8 @@ class MmapTensorStreamer:
             t = torch.from_numpy(arr.copy())
             if dtype_str == "BF16":
                 t = t.view(torch.bfloat16)
+            if self.upcast_float32 and t.dtype in (torch.bfloat16, torch.float16):
+                t = t.float()
             if target_device != "cpu" and torch.cuda.is_available():
                 t = t.to(target_device, non_blocking=True)
             return t

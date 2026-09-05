@@ -237,7 +237,18 @@ class HardwareProfiler:
                 ("D:\\", "Windows D: Drive (Mass Storage)"),
             ]
         else:
-            paths_to_check = [("/", "Root Filesystem")]
+            from lazy_lora.core.config import (default_model_dir, default_workspace_dir,
+                                               default_fast_scratch_dir)
+            paths_to_check = [("/", "Root Filesystem (system)")]
+            for p, label in ((default_model_dir(), "Model checkpoint volume"),
+                             (default_workspace_dir(), "Workspace volume"),
+                             (default_fast_scratch_dir(), "Fast scratch volume (activations, checkpoints)")):
+                # Walk up to the nearest existing ancestor so an unmounted scratch dir is reported
+                q = p
+                while q and not os.path.exists(q):
+                    q = os.path.dirname(q)
+                if q and q not in [x for x, _ in paths_to_check]:
+                    paths_to_check.append((q, label))
 
         for p, label in paths_to_check:
             if os.path.exists(p):
@@ -248,7 +259,8 @@ class HardwareProfiler:
                     free_gb = usage.free / (1024 ** 3)
                     pct = (used_gb / total_gb) * 100.0 if total_gb > 0 else 0.0
                     
-                    is_safe = free_gb > 50.0 and ("c:" not in p.lower() and "/mnt/c" not in p.lower())
+                    is_system = p in ("/", "C:\\") or "/mnt/c" in p.lower()
+                    is_safe = free_gb > 50.0 and not is_system
 
                     disks.append(DiskInfo(
                         path=p,
@@ -280,9 +292,13 @@ class HardwareProfiler:
             c_safe = False
 
         d_disk = next((d for d in disks if "d:" in d.path.lower() or "/mnt/d" in d.path.lower()), None)
-        rec_storage = "/mnt/d/LazyLora_Workspace" if is_wsl and d_disk else (
-            "D:\\LazyLora_Workspace" if d_disk else "./workspace"
-        )
+        if is_wsl or platform.system() == "Windows":
+            rec_storage = "/mnt/d/LazyLora_Workspace" if is_wsl and d_disk else (
+                "D:\\LazyLora_Workspace" if d_disk else "./workspace"
+            )
+        else:
+            from lazy_lora.core.config import default_workspace_dir
+            rec_storage = default_workspace_dir()
 
         vram_mb = gpu.total_vram_mb if gpu else 0.0
         rec_vram_budget = max(512.0, vram_mb - 1536.0) if vram_mb > 0 else 0.0

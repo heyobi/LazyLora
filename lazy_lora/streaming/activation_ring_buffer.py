@@ -17,6 +17,8 @@ except ImportError:
     HAS_TORCH = False
     torch = None
 
+from lazy_lora.core.config import default_activation_dir
+
 
 class ActivationRingBuffer:
     """
@@ -24,8 +26,8 @@ class ActivationRingBuffer:
     Pre-allocates buffers and rotates cleanly without memory or disk leaks.
     """
 
-    def __init__(self, cache_dir: str = "/mnt/d/hamza/LazyLora_Workspace/activations", num_layers: int = 93):
-        self.cache_dir = cache_dir
+    def __init__(self, cache_dir: Optional[str] = None, num_layers: int = 93):
+        self.cache_dir = cache_dir or default_activation_dir()
         self.num_layers = num_layers
         os.makedirs(self.cache_dir, exist_ok=True)
         self._layer_shapes = {}

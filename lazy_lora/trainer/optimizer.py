@@ -70,6 +70,38 @@ class LazyLoRAOptimizer:
         self.m_states: Dict[int, Any] = {}
         self.v_states: Dict[int, Any] = {}
 
+    def state_dict(self) -> Dict[str, Any]:
+        """Everything needed to resume: moments, step counter, schedule and hyperparameters."""
+        return {
+            "step_count": self.step_count,
+            "m_states": {int(k): (v.detach().cpu().clone() if HAS_TORCH and isinstance(v, torch.Tensor) else np.array(v))
+                         for k, v in self.m_states.items()},
+            "v_states": {int(k): (v.detach().cpu().clone() if HAS_TORCH and isinstance(v, torch.Tensor) else np.array(v))
+                         for k, v in self.v_states.items()},
+            "lr": self.lr, "betas": (self.beta1, self.beta2), "eps": self.eps,
+            "weight_decay": self.weight_decay, "grad_clip_norm": self.grad_clip_norm,
+            "scheduler": {"base_lr": self.scheduler.base_lr, "min_lr": self.scheduler.min_lr,
+                          "warmup_steps": self.scheduler.warmup_steps, "max_steps": self.scheduler.max_steps},
+        }
+
+    def load_state_dict(self, state: Dict[str, Any]) -> None:
+        """Restore moments and the step counter. Without the moments a resumed Adam restarts
+        its bias correction at zero and the first steps take an effective lr far above the
+        schedule."""
+        self.step_count = int(state["step_count"])
+        n = len(self.parameters)
+        self.m_states = {}
+        self.v_states = {}
+        for k, v in state["m_states"].items():
+            if int(k) < n:
+                self.m_states[int(k)] = v.clone() if HAS_TORCH and isinstance(v, torch.Tensor) else np.array(v)
+        for k, v in state["v_states"].items():
+            if int(k) < n:
+                self.v_states[int(k)] = v.clone() if HAS_TORCH and isinstance(v, torch.Tensor) else np.array(v)
+        sch = state.get("scheduler")
+        if sch:
+            self.scheduler = CosineWarmupLRScheduler(sch["base_lr"], sch["min_lr"], sch["warmup_steps"], sch["max_steps"])
+
     def zero_grad(self) -> None:
         """Clear all gradients."""
         for p in self.parameters:

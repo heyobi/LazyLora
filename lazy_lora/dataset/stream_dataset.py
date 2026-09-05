@@ -130,13 +130,23 @@ class StreamingDatasetIterator:
         batch_size: int = 1,
         as_torch: bool = True,
         device: str = "cpu",
+        skip_samples: int = 0,
     ) -> Iterator[Tuple[Union["torch.Tensor", np.ndarray], Union["torch.Tensor", np.ndarray]]]:
         """
         Yields (input_ids, target_ids) micro-batches.
+
+        `skip_samples` skips that many leading samples, so a run resumed from a checkpoint
+        continues with the data it had not seen. `self.samples_consumed` counts the samples
+        that went into the batches yielded so far (including skipped ones).
         """
         current_batch_tokens = []
+        self.samples_consumed = 0
 
         for sample in self.iterate_samples():
+            if self.samples_consumed < skip_samples:
+                self.samples_consumed += 1
+                continue
+            self.samples_consumed += 1
             token_ids = self._tokenize_sample(sample)
             
             # Truncate / Pad to max_seq_len

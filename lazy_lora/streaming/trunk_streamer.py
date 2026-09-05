@@ -17,6 +17,7 @@ except ImportError:
     torch = None
 
 from lazy_lora.streaming.mmap_loader import MmapTensorStreamer
+from lazy_lora.core.config import synthetic_allowed, synthetic_enabled
 
 
 class RMSNormFunction:
@@ -116,6 +117,10 @@ class LayerTrunkStreamer:
         # the MoE saw a unit-scale input and its output came out roughly 90x too large.
         # The attention projections below are only used by the mock paths now; the real
         # ones are streamed by load_attention_weights per layer type.
+        missing = [n for n, v in (("input_layernorm", in_norm), ("post_attention_layernorm", post_norm)) if v is None]
+        missing += [n for n, v in res.items() if v is None]
+        if missing:
+            synthetic_allowed(f"layer {layer_idx} trunk tensors {missing}")
         if in_norm is None:
             in_norm = (torch.ones(d_hidden, dtype=torch.bfloat16, device=self.device)
                        if HAS_TORCH else np.ones(d_hidden, dtype=np.float32))
@@ -124,7 +129,9 @@ class LayerTrunkStreamer:
                          if HAS_TORCH else np.ones(d_hidden, dtype=np.float32))
         for name, value in (("q_proj", q_proj), ("k_proj", k_proj),
                             ("v_proj", v_proj), ("o_proj", o_proj)):
-            if value is not None:
+            if value is not None or not synthetic_enabled():
+                # MLA layers legitimately have no q_proj; the real attention path never
+                # reads these four, so only the mock configuration gets stand-ins.
                 continue
             synth = (torch.randn(d_hidden, d_hidden, dtype=torch.bfloat16, device=self.device) * 0.02
                      if HAS_TORCH else (np.random.randn(d_hidden, d_hidden) * 0.02).astype(np.float32))
@@ -191,6 +198,7 @@ class LayerTrunkStreamer:
             setattr(w, attr, tensor)
 
         if missing:
+            synthetic_allowed(f"layer {layer_idx} attention tensors {missing}")
             self._fill_synthetic_attention(
                 w, missing, num_heads, head_dim, conv_kernel, q_lora_rank, kv_lora_rank,
                 qk_nope_head_dim, qk_rope_head_dim, v_head_dim,

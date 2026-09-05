@@ -85,6 +85,7 @@ class TestDatasetAndConvergence(unittest.TestCase):
         os.makedirs(test_config.paths.base_model_dir, exist_ok=True)
 
         trainer = LazyLoRATrainer(test_config)
+        self.addCleanup(trainer.close)
 
         seq_len = 32
         losses = []

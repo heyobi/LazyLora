@@ -5,32 +5,29 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_EXEC="/mnt/d/hamza/LazyLora_Workspace/venv/bin/python"
+PYTHON_EXEC="${LAZYLORA_PYTHON:-/home/ibox/venvs/lazylora/bin/python}"
 
 if [ ! -f "$PYTHON_EXEC" ]; then
     PYTHON_EXEC="python3"
 fi
 
 export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
-export HF_HOME="/mnt/d/hamza/LazyLora_Workspace/cache/huggingface"
-export TORCH_HOME="/mnt/d/hamza/LazyLora_Workspace/cache/torch"
-export TMPDIR="/mnt/d/hamza/LazyLora_Workspace/cache"
+CACHE_DIR="$("$PYTHON_EXEC" -c "from lazy_lora.core.config import default_cache_dir; print(default_cache_dir())")"
+export HF_HOME="${CACHE_DIR}/huggingface"
+export TORCH_HOME="${CACHE_DIR}/torch"
+export TMPDIR="${CACHE_DIR}"
 export PYTHONUNBUFFERED=1
 
 echo "Checking model weight integrity before starting training..."
-MODEL_DIR="/mnt/d/hamza/kimi_k3_model_weights"
-
-SHARD_COUNT=$(find "$MODEL_DIR" -name "model-*.safetensors" 2>/dev/null | wc -l)
-echo "Found $SHARD_COUNT / 96 shards in $MODEL_DIR"
-
-if [ "$SHARD_COUNT" -lt 96 ]; then
+# Every shard must exist, be complete and carry the tensors the index promises. A
+# missing or empty shard used to be counted as present and silently replaced by random
+# weights at run time.
+if ! "$PYTHON_EXEC" scripts/check_shards.py; then
     echo "=========================================================================="
-    echo " [NOTICE] Model is currently downloading ($SHARD_COUNT/96 shards present)."
-    echo " Full training cannot start until all 96 shards are downloaded."
-    echo " You can run the pre-training verification tests anytime:"
-    echo "   bash scripts/run_mock_tests.sh"
+    echo " [ABORT] The checkpoint is incomplete or damaged; see the report above."
+    echo "         Training on it would compute nonsense. Fix the shards first."
     echo "=========================================================================="
-    exit 0
+    exit 1
 fi
 
 echo "Starting LazyLoRA Out-of-Core MoE Training..."

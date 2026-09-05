@@ -36,11 +36,10 @@ class TestSyntheticLazyTrain(unittest.TestCase):
         self.config.lora.lora_alpha = 16
         self.config.training.max_steps = 5
         self.config.training.learning_rate = 1e-3
-        self.config.paths.workspace_dir = "/mnt/d/hamza/LazyLora_Workspace"
         # Point the weight source at an empty mock directory so the streamers fall back to
         # synthetic tensors with the small test dimensions. Without this the engine silently
         # mmaps the real 7168-dim Kimi K3 shards and every shape assertion becomes meaningless.
-        self.config.paths.base_model_dir = "/mnt/d/hamza/LazyLora_Workspace/mock_weights"
+        self.config.paths.base_model_dir = os.path.join(self.config.paths.workspace_dir, "mock_weights")
         os.makedirs(self.config.paths.base_model_dir, exist_ok=True)
         self.config.paths.ensure_directories()
 
@@ -50,6 +49,7 @@ class TestSyntheticLazyTrain(unittest.TestCase):
 
     def test_end_to_end_mock_training(self):
         trainer = LazyLoRATrainer(self.config)
+        self.addCleanup(trainer.close)
 
         # Batch iterator
         stream_iter = StreamingDatasetIterator(
@@ -77,12 +77,32 @@ class TestSyntheticLazyTrain(unittest.TestCase):
 
         print("--- SYNTHETIC LAZYLORA VALIDATION COMPLETED SUCCESSFULLY ---\n")
 
-        # Save checkpoint
-        ckpt_file = trainer.save_lora_checkpoint(step=3)
+        # Save a full checkpoint, then restore it into a fresh trainer and compare
+        ckpt_file = trainer.save_lora_checkpoint(step=3, data_cursor=7)
         self.assertTrue(
             os.path.exists(ckpt_file) or os.path.exists(ckpt_file.replace(".pt", ".npz")),
-            "LoRA checkpoint must be saved on D: drive",
+            "LoRA checkpoint must be saved in the checkpoints directory",
         )
+        self.assertFalse(os.path.exists(ckpt_file + ".tmp"), "temporary checkpoint file must be renamed away")
+
+        try:
+            import torch
+        except ImportError:
+            return
+        other = LazyLoRATrainer(self.config)
+        self.addCleanup(other.close)
+        meta = other.load_checkpoint(ckpt_file)
+        self.assertEqual(meta["step"], 3)
+        self.assertEqual(meta["data_cursor"], 7)
+        self.assertEqual(other.optimizer.step_count, trainer.optimizer.step_count)
+        for l, (b1, b2) in enumerate(zip(trainer.lora_layers, other.lora_layers)):
+            for (n1, m1), (n2, m2) in zip(b1.all_modules(), b2.all_modules()):
+                self.assertTrue(torch.equal(m1.lora_A.detach(), m2.lora_A.detach()), f"layer {l} {n1} A differs")
+                self.assertTrue(torch.equal(m1.lora_B.detach(), m2.lora_B.detach()), f"layer {l} {n1} B differs")
+        self.assertEqual(set(other.optimizer.m_states), set(trainer.optimizer.m_states))
+        for k in trainer.optimizer.m_states:
+            self.assertTrue(torch.equal(trainer.optimizer.m_states[k], other.optimizer.m_states[k]), f"moment m[{k}] differs")
+            self.assertTrue(torch.equal(trainer.optimizer.v_states[k], other.optimizer.v_states[k]), f"moment v[{k}] differs")
 
 
 if __name__ == "__main__":

@@ -44,8 +44,9 @@ class TurkishDatasetManager:
     Manages Turkish dataset preparation, synthesis, formatting, and disk caching.
     """
 
-    def __init__(self, dataset_dir: str = "/mnt/d/hamza/LazyLora_Workspace/datasets"):
-        self.dataset_dir = dataset_dir
+    def __init__(self, dataset_dir: Optional[str] = None):
+        from lazy_lora.core.config import default_dataset_dir
+        self.dataset_dir = dataset_dir or default_dataset_dir()
         os.makedirs(self.dataset_dir, exist_ok=True)
         self.train_file = os.path.join(self.dataset_dir, "turkish_instruct_train.jsonl")
         self.val_file = os.path.join(self.dataset_dir, "turkish_instruct_val.jsonl")

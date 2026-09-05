@@ -16,21 +16,23 @@ class TestHardwareProfiler(unittest.TestCase):
         self.assertGreater(profile.memory.total_ram_gb, 0)
         self.assertGreater(len(profile.disks), 0)
 
-        # Check D: drive presence and C: drive isolation
-        has_d_drive = any("d:" in d.path.lower() or "/mnt/d" in d.path.lower() for d in profile.disks)
-        self.assertTrue(has_d_drive, "D: Drive must be available for out-of-core storage")
-
-        c_disk = next((d for d in profile.disks if "c:" in d.path.lower() or "/mnt/c" in d.path.lower()), None)
-        if c_disk:
-            # Assert C: drive is marked as protected
-            self.assertFalse(c_disk.is_safe_for_storage, "C: drive must NOT be marked as safe for massive model storage")
+        # The system volume must never be marked as safe for model-scale storage
+        sys_disk = next((d for d in profile.disks
+                         if d.path in ("/", "C:\\") or "/mnt/c" in d.path.lower()), None)
+        if sys_disk:
+            self.assertFalse(sys_disk.is_safe_for_storage, "system volume must NOT be marked as safe for massive model storage")
+        # At least one non-system volume must be listed
+        self.assertTrue(any(d is not sys_disk for d in profile.disks), "no storage volume besides the system one was found")
 
     def test_recommended_storage_path(self):
         profile = HardwareProfiler.analyze_system()
-        self.assertTrue(
-            "/mnt/d" in profile.recommended_storage_path or "D:" in profile.recommended_storage_path,
-            f"Recommended storage must be on D: drive, got: {profile.recommended_storage_path}",
-        )
+        from lazy_lora.core.config import get_default_config
+        if profile.is_wsl:
+            self.assertIn("/mnt/d", profile.recommended_storage_path)
+        else:
+            self.assertEqual(profile.recommended_storage_path, get_default_config().paths.workspace_dir)
+        parent = os.path.dirname(profile.recommended_storage_path.rstrip("/"))
+        self.assertTrue(os.path.isdir(parent), f"recommended storage parent does not exist: {parent}")
 
 
 if __name__ == "__main__":

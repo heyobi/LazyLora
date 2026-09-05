@@ -152,3 +152,109 @@ Op-bazlı fixture'lar: `kimi-k3-in-c/tests/fixtures/ops/` — kendi ağırlıkla
 **Başarılamayan:** Eğitilmiş bir Türkçe adaptör. Sebep hesap değil, **veri hacmi**: adım başına 1,45 TB'ın diskten geçmesi gerekiyor.
 
 **Ölçek gerçeği:** LIMA benzeri 1000 örneklik bir set, 512 token'lık dizilerle mekanik diskte ~2 yıl, SATA SSD'de ~4-5 ay sürer. Anlamlı hedef, birkaç yüz adımlık odaklı bir eğitimdir.
+
+---
+
+## 10. YENİ MAKİNE KURULUMU (5 Eylül 2026)
+
+Proje bu tarihten itibaren şu makinede yürüyor: i7-7700HQ (4C/8T, AVX2), 7,6 GB RAM,
+native Ubuntu 24.04, GPU yok. Diskler: SSD `/` (sistem, kod, venv), NVMe `/mnt/nvme`
+(hızlı geçici alan), HDD `/mnt/disk2tb` (NTFS, ntfs3 ile bağlı; checkpoint ve çalışma alanı).
+
+| Ne | Nerede |
+|---|---|
+| Çalışan repo | `/home/ibox/calisma/LazyLora` (devir paketinden klon, git geçmişi dahil) |
+| Referans motor | `/home/ibox/calisma/kimi-k3-in-c` (derlendi, `make test` 22/22 geçti) |
+| Python ortamı | `/home/ibox/venvs/lazylora` (torch 2.14 CPU, numpy 2.5, safetensors, tiktoken) |
+| Model | `/mnt/disk2tb/hamza/kimi_k3_model_weights` |
+| Çalışma alanı | `/mnt/disk2tb/hamza/LazyLora_Workspace` (veri seti, önbellek, ölçüm günlükleri) |
+| Aktivasyon / checkpoint | `/mnt/nvme/lazylora/{activations,checkpoints}` |
+| Devir paketi (dokunma) | `/mnt/disk2tb/hamza/LazyLora_Handoff` |
+
+Bütün yollar artık `lazy_lora/core/config.py` içindeki `default_*_dir()` fonksiyonlarından
+gelir ve ortam değişkeniyle ezilebilir: `LAZYLORA_MODEL_DIR`, `LAZYLORA_WORKSPACE_DIR`,
+`LAZYLORA_FAST_SCRATCH_DIR`, `LAZYLORA_ACTIVATION_DIR`, `LAZYLORA_CHECKPOINTS_DIR`,
+`LAZYLORA_DATASET_DIR`, `LAZYLORA_CACHE_DIR`, `LAZYLORA_REF_FIXTURES`, `LAZYLORA_PYTHON`.
+
+### Sentetik yedek politikası değişti
+
+Bölüm 6.1'deki tuzak kapatıldı: bir tensör diskte yoksa motor artık **hata fırlatır**
+(`MissingTensorError`). Rastgele ağırlıkla devam etmek yalnızca `LAZYLORA_ALLOW_SYNTHETIC=1`
+ile mümkündür; bunu yalnızca `scripts/run_mock_tests.sh` ve `lazy_lora/tests/__init__.py`
+ayarlar. NumPy yolundaki rastgele latent projeksiyonlar da (rapor K3) diskten okunur oldu.
+
+### Checkpoint eksik: shard 68 ve 69
+
+`model-00068` ve `model-00069` bu diskte **0 bayt** (26 Ağustos'tan beri). Katman 67 ve 68'in
+tamamı eksik. Bölüm 2'deki "hepsi temiz" ifadesi yanlıştı; eski tarama boş shard'ı
+"0 damaged" saymıştı. Yeni kontrol: `python scripts/check_shards.py` (ağsız, 5 saniye;
+`train_lazy_lora.sh` bunu geçmeden başlamaz). İndirme: `LazyLora_Workspace/fetch_shards.py`
+(kaldığı yerden devam eder, sha256 doğrular).
+
+Ayrıca `workspace/c_ref13.log` dikkatle okunmalı: 13 katmanlı C referans koşusu katman 9'da
+6 uzmanı okuyamayıp düşürmüş ve kendini `RUN INVALID` ilan etmiş. Katman 9'daki cosine
+düşüşü (0,9966) muhtemelen bizim değil, referansın hatasıdır. Katman 0-8 karşılaştırması
+geçerlidir; 9-12 yeniden üretilmelidir.
+
+### Modelsiz doğrulama
+
+```bash
+export PYTHONPATH=/home/ibox/calisma/LazyLora
+/home/ibox/venvs/lazylora/bin/python -m unittest lazy_lora.tests.test_reference_ops   # 8/8
+bash scripts/run_mock_tests.sh                                                        # mock süiti
+python scripts/check_shards.py                                                        # checkpoint bütünlüğü
+python scripts/compare_with_c_dump.py --dump <chdump> --ids 19180,11 --layers 13      # gerçek ağırlık, C dökümüne karşı
+```
+
+## 11. GERİ GEÇİŞ YENİDEN YAZILDI VE DOĞRULANDI (5 Eylül 2026)
+
+Rapordaki K1, K2, K8 maddeleri kapatıldı.
+
+**Ne değişti (`lazy_lora/trainer/lazy_trainer.py`):**
+- Katmanın hesabı tek bir yerde: `_run_layer(layer_idx, h_in, bank)`. İleri geçiş bunu
+  `no_grad` altında, geri geçiş `enable_grad` altında **aynı kodu tekrar oynatarak** çalıştırır.
+  Banka karışımı, blok sınırında akışın sıfırlanması, latent RMSNorm jakobiyeni, yönlendirici
+  ağırlıklarından akışa dönen gradyan: hepsi autograd'dan gelir, elle türetilmiş kısım yok.
+- Yönlendirilmiş uzmanlar tek bir `torch.autograd.Function` (`RoutedExpertsFunction`): ileri
+  geçişte uzmanlar bir kez, geri geçişte bir kez daha diskten akıtılır; LoRA gradyanları ve
+  dL/dh_latent orada elle hesaplanır (600 uzmanı autograd grafiğinde tutmak onlarca GB olurdu).
+- Banka gradyanı: banka girdileri sınır katmanlarının (0, 12, 24, ...) h_in'idir ve zaten
+  aktivasyon tamponunda durur; geri geçiş bankayı oradan yeniden kurar. Bankaya akan gradyan
+  `_grad_bank`'ta bekletilir ve sıra o sınır katmanına gelince grad_h_in'e eklenir.
+- Çıkış karışımı + son norm da (`_finalize_backward`) artık türevleniyor; eskiden atlanıyordu.
+- Uzman toplamı fp32'de birikiyor (C referansı gibi); bf16 birikim katman çıktısını ~1e-3
+  kaydırıp birkaç katman sonra yönlendirmeyi değiştiriyordu.
+- LoRA parametreleri fp32 (K2). `lora_dropout` 0 (yeniden hesaplamalı geri geçişle uyumsuz).
+- NumPy yolu kaldırıldı (dikkat zaten torch istiyordu; ölü koddu ve K3'ün kaynağıydı).
+
+**Doğrulama (`scripts/verify_backward.py`, gerçek ağırlıklar, fp32, 4 token):**
+Analitik yönlü türev ile merkezi sonlu fark, LoRA tensörleri + h_in + banka yönlerinde:
+
+| Katman | Özellik | En kötü göreli hata |
+|---|---|---|
+| 1 | KDA + MoE, 1 banka girdisi | 1.1e-3 |
+| 12 | blok sınırı (banka itme, akış sıfırlama) | 2.0e-3 |
+| 13 | 2 banka girdisi | 9.1e-4 |
+| 1 | 16 LoRA tensörünün tamamı (q/v dikkat dahil) + h_in + banka | 9.1e-3 (türevi ~3e-4 olan 2 yön; kalanı ≤2e-3) |
+| 3 | MLA, 16 tensörün tamamı + h_in + banka | 3.6e-3 |
+
+Günlükler: `LazyLora_Workspace/k8_layer*_2026-09-05.log`. İleri geçiş değişmedi
+(`cmp13_after_refactor2_2026-09-05.log`, önceki koşuyla birebir).
+
+**Ölçülen maliyet (bu makine, fp32, 4 token):** katman başına geri geçiş 37-46 s.
+
+**Not:** Sonlu fark fp32 motorda bile ancak kayıp float64'te toplanıp adım yöne göre
+ölçeklenince anlamlı çıktı; ilk sürüm (fp32 kayıp, sabit eps=1e-3) 1-2 ulp'lik farklar ölçüp
+sahte uyumsuzluk raporladı. Harness'ı değiştirirken buna dikkat.
+
+## 12. TAM CHECKPOINT (K4, 5 Eylül 2026)
+
+`save_lora_checkpoint(step, data_cursor)` artık LoRA tensörleriyle birlikte Adam momentlerini,
+adım sayacını, LR zamanlayıcısını, torch/numpy RNG durumlarını ve veri kümesi imlecini tek
+dosyaya yazar; önce `.tmp`'ye yazılıp `fsync` sonrası `os.replace` ile yerine konur (yarım
+dosya asla nihai adı taşımaz). `checkpoints/latest.txt` son dosyanın adını tutar.
+
+Devam etmek: `python -m lazy_lora.trainer.lazy_trainer --resume <ckpt.pt> --steps N`
+(`LazyLoRATrainer.load_checkpoint`, `train(resume_from=...)`; veri imleci
+`StreamingDatasetIterator.get_batches(skip_samples=...)` ile uygulanır).
+Eski biçim (yalnızca LoRA sözlüğü) da yüklenir, ama optimizer sıfırdan başlar.

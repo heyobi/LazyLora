@@ -21,6 +21,7 @@ except ImportError:
 
 from lazy_lora.streaming.mmap_loader import MmapTensorStreamer
 from lazy_lora.core.situ_activation import situ_glu_forward
+from lazy_lora.core.config import synthetic_allowed
 
 
 class ExpertWeightBundle:
@@ -89,7 +90,7 @@ def _pair_lut(device):
     return _PAIR_LUT
 
 
-def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
+def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32, out_dtype=None):
     """
     Dequantize Kimi K3's routed experts, which are stored as MXFP4.
 
@@ -139,7 +140,7 @@ def _dequantize_mxfp4(weight_packed, weight_scale, group_size: int = 32):
         else:
             values = values * multiplier.view(-1, 1)
 
-        return values.to(torch.bfloat16)
+        return values.to(out_dtype or torch.bfloat16)
 
     if isinstance(weight_packed, np.ndarray):
         codes = np.stack(
@@ -190,6 +191,12 @@ class DynamicExpertStreamer:
         # Kimi K3 fuses its 2 shared experts into one module of width 2 * moe_intermediate_size
         self.shared_intermediate_size = shared_intermediate_size or (moe_intermediate_size * 2)
 
+    @property
+    def weight_dtype(self):
+        if HAS_TORCH and getattr(self.mmap_streamer, "upcast_float32", False):
+            return torch.float32
+        return torch.bfloat16 if HAS_TORCH else np.float32
+
     def _load_single_expert(self, layer_idx: int, expert_idx: int, is_shared: bool = False) -> ExpertWeightBundle:
         """
         Load gate (w1), up (w3), down (w2) projections for an expert from mmap.
@@ -216,17 +223,18 @@ class DynamicExpertStreamer:
             w3_scale = self.mmap_streamer.load_tensor(f"{prefix}w3.weight_scale", target_device=self.device)
 
             if w1_packed is not None and w1_scale is not None:
-                gate = _dequantize_mxfp4(w1_packed, w1_scale)
-                down = _dequantize_mxfp4(w2_packed, w2_scale)
-                up = _dequantize_mxfp4(w3_packed, w3_scale)
+                gate = _dequantize_mxfp4(w1_packed, w1_scale, out_dtype=self.weight_dtype)
+                down = _dequantize_mxfp4(w2_packed, w2_scale, out_dtype=self.weight_dtype)
+                up = _dequantize_mxfp4(w3_packed, w3_scale, out_dtype=self.weight_dtype)
             else:
                 # Fallback: try full-precision names
                 gate = self.mmap_streamer.load_tensor(f"{prefix}w1.weight", target_device=self.device)
                 down = self.mmap_streamer.load_tensor(f"{prefix}w2.weight", target_device=self.device)
                 up = self.mmap_streamer.load_tensor(f"{prefix}w3.weight", target_device=self.device)
 
-        # Synthetic fallback with CORRECT dimensions for testing
+        # Synthetic fallback with CORRECT dimensions for testing (mock suite only)
         if gate is None or up is None or down is None:
+            synthetic_allowed(f"layer {layer_idx} {'shared expert' if is_shared else f'routed expert {expert_idx}'} weights")
             if is_shared:
                 # Shared expert: intermediate_size = moe_intermediate_size * num_shared_experts
                 d_in = self.hidden_size                 # 7168
@@ -245,11 +253,11 @@ class DynamicExpertStreamer:
                 up = (np.random.randn(d_mid, d_in) * 0.01).astype(np.float32)
                 down = (np.random.randn(d_in, d_mid) * 0.01).astype(np.float32)
 
-        # Ensure bfloat16 dtype
-        if HAS_TORCH and isinstance(gate, torch.Tensor) and gate.dtype != torch.bfloat16:
-            gate = gate.to(torch.bfloat16)
-            up = up.to(torch.bfloat16)
-            down = down.to(torch.bfloat16)
+        # Ensure the compute dtype (bfloat16, or float32 under LAZYLORA_COMPUTE_FP32)
+        if HAS_TORCH and isinstance(gate, torch.Tensor) and gate.dtype != self.weight_dtype:
+            gate = gate.to(self.weight_dtype)
+            up = up.to(self.weight_dtype)
+            down = down.to(self.weight_dtype)
 
         return ExpertWeightBundle(expert_idx, gate, up, down)
 

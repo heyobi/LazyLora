@@ -7,12 +7,13 @@ import shutil
 import unittest
 import numpy as np
 from lazy_lora.streaming.activation_ring_buffer import ActivationRingBuffer
+from lazy_lora.core.config import get_default_config
 
 
 class TestStreamingAndRingBuffer(unittest.TestCase):
 
     def setUp(self):
-        self.test_cache_dir = "/mnt/d/hamza/LazyLora_Workspace/test_activations"
+        self.test_cache_dir = os.path.join(get_default_config().paths.workspace_dir, "test_activations")
         os.makedirs(self.test_cache_dir, exist_ok=True)
         self.buffer = ActivationRingBuffer(cache_dir=self.test_cache_dir, num_layers=4)
 

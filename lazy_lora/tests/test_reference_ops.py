@@ -24,8 +24,9 @@ except ImportError:
     HAS_TORCH = False
 
 from lazy_lora.core.situ_activation import situ_glu_forward
+from lazy_lora.core.config import default_reference_fixtures_dir
 
-FIXTURES = "/mnt/d/hamza/kimi-k3-in-c/tests/fixtures/ops"
+FIXTURES = default_reference_fixtures_dir()
 ABS_TOL = 1e-5
 REL_TOL = 1e-4
 
@@ -40,7 +41,7 @@ def as_array(entry):
     return np.asarray(entry["data"], dtype=np.float32).reshape(entry["shape"])
 
 
-@unittest.skipUnless(os.path.isdir(FIXTURES), "reference fixtures not present")
+@unittest.skipUnless(os.path.isdir(FIXTURES), f"reference fixtures not present at {FIXTURES} (set LAZYLORA_REF_FIXTURES)")
 @unittest.skipUnless(HAS_TORCH, "torch required")
 class TestReferenceOps(unittest.TestCase):
 

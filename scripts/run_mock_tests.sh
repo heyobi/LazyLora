@@ -3,13 +3,15 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_EXEC="/mnt/d/hamza/LazyLora_Workspace/venv/bin/python"
+PYTHON_EXEC="${LAZYLORA_PYTHON:-/home/ibox/venvs/lazylora/bin/python}"
 
 if [ ! -f "$PYTHON_EXEC" ]; then
     PYTHON_EXEC="python3"
 fi
 
 export PYTHONPATH="${SCRIPT_DIR}:${PYTHONPATH:-}"
+# The mock suite is the only place synthetic stand-in tensors are legitimate.
+export LAZYLORA_ALLOW_SYNTHETIC=1
 
 echo "============================================================"
 echo "          RUNNING LAZYLORA PRE-TRAINING TEST SUITE         "

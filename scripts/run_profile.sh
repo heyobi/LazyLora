@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PYTHON_EXEC="/mnt/d/hamza/LazyLora_Workspace/venv/bin/python"
+PYTHON_EXEC="${LAZYLORA_PYTHON:-/home/ibox/venvs/lazylora/bin/python}"
 
 if [ ! -f "$PYTHON_EXEC" ]; then
     PYTHON_EXEC="python3"

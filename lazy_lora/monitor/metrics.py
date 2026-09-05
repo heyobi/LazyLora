@@ -4,6 +4,7 @@ Tracks GPU VRAM, Host RAM, Disk I/O throughput, active layer/expert IDs,
 loss progression, step latency, and ETA.
 """
 
+import os
 import time
 import shutil
 import platform
@@ -161,7 +162,10 @@ class MetricsTracker:
         try:
             import json
             from dataclasses import asdict
-            with open("/mnt/d/hamza/LazyLora_Workspace/cache/live_metrics.json", "w", encoding="utf-8") as f:
+            from lazy_lora.core.config import default_cache_dir
+            live_path = os.path.join(default_cache_dir(), "live_metrics.json")
+            os.makedirs(os.path.dirname(live_path), exist_ok=True)
+            with open(live_path, "w", encoding="utf-8") as f:
                 json.dump(asdict(m), f, ensure_ascii=False, indent=2)
         except Exception:
             pass
