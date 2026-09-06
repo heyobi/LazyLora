@@ -643,3 +643,20 @@ sabit bir ikamet önbelleği bu NVMe ile anlamlı kazanç vermiyor. Fikir 2 bu d
 **uygulanmayacak**; kaldıraç disk bant genişliği (boru hattı) ve batch boyutudur. Yalnızca
 uzun bir eğitimde aynı alanın verisi tekrar tekrar geçiyorsa (örneğin sadece Türkçe düzyazı)
 metne özgü sıcak küme yeniden değerlendirilebilir.
+
+### 17.1 Katman 13-92 doğrulaması ve dev aktivasyonun teyidi (6 Eylül 2026, akşam)
+
+İngilizce paragrafın ilk 34 token'ı (BOS dahil; 32. token " front") C motorundan 93 katman
+geçirildi (61 dk, tepe RSS 5.2 GB, hatasız) ve LazyLoRA aynı diziyi katman katman karşılaştırdı
+(`cmp93_en34_2026-09-06.log`, 48 dk, 427 GB okuma):
+
+| katman | 12 | 24 | 48 | 72 | 84 | 88 | 90 | 91 | 92 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| kosinüs | 0.99978 | 0.99919 | 0.99797 | 0.98791 | 0.99773 | 0.99700 | 0.99889 | 0.99966 | 0.99984 |
+| bizim std | 0.054 | 0.0062 | 0.0068 | 0.040 | 0.094 | 0.330 | 0.835 | 22.28 | 43.28 |
+| C std | 0.054 | 0.0062 | 0.0068 | 0.040 | 0.094 | 0.331 | 0.834 | 22.18 | 43.24 |
+
+93 katmanın tamamı bağımsız implementasyonla eşleşiyor (en düşük kosinüs 0.988, katman 72;
+bf16 hesabın 90 katman boyunca biriken farkı, blok sınırlarında sıfırlanıyor). Katman 91-92'deki
+dev aktivasyon **C motorunda da aynı**: modelin kendi davranışı, motor hatası değil. Bu, ileri
+geçişin 13 değil 93 katmanda doğrulandığı ilk kayıttır.
