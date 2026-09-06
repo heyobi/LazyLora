@@ -627,3 +627,19 @@ biçimde kuyruğa alındı (`run_cref93.sh`).
 **Sıcak uzman önbelleği için ölçü:** aktivasyonların %80'ini kapsayan uzman sayısı katman
 başına 140 (katman 56) ile 461 (katman 1) arasında, medyan 251; toplam 25.157 uzman = 440 GB.
 15 GB'lık NVMe artığı bunun %3'ü. Bütçeye göre tasarruf simülasyonu aşağıda (leave-one-out).
+
+**Sıcak uzman önbelleği simülasyonu** (4 metinden seçilen (katman, uzman) çiftleri, 5. metinde
+ölçüm; katman başına HDD'den okunan uzman 436):
+
+| NVMe bütçesi | uzman | okunan uzman / katman | tasarruf |
+|---:|---:|---:|---:|
+| 15 GB | 857 | 428 | %2 |
+| 50 GB | 2857 | 411 | %6 |
+| 100 GB | 5714 | 386 | %11 |
+| 200 GB | 11428 | 340 | %22 |
+
+Sonuç: metin içi yoğunlaşma güçlü ama sıcak kümeler metinden metne değişiyor (alan etkisi);
+sabit bir ikamet önbelleği bu NVMe ile anlamlı kazanç vermiyor. Fikir 2 bu donanımda
+**uygulanmayacak**; kaldıraç disk bant genişliği (boru hattı) ve batch boyutudur. Yalnızca
+uzun bir eğitimde aynı alanın verisi tekrar tekrar geçiyorsa (örneğin sadece Türkçe düzyazı)
+metne özgü sıcak küme yeniden değerlendirilebilir.
