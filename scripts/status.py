@@ -62,6 +62,7 @@ def main():
     print("git     :", sh("cd /home/ibox/calisma/LazyLora && git log --oneline -1 && git status --short | wc -l | xargs -I{} echo '{} uncommitted files'"))
     err = sh("sudo -n dmesg 2>/dev/null | grep -cE 'I/O error, dev sd|failed to read volume'")
     print("disk errs in kernel log:", err or "n/a")
+    print("gpu     :", sh("nvidia-smi --query-gpu=temperature.gpu,utilization.gpu,memory.used --format=csv,noheader 2>/dev/null"))
 
 
 if __name__ == "__main__":

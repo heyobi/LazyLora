@@ -177,6 +177,13 @@ class LazyLoRATrainer:
         # Optional expert access trace (lazy_lora.monitor.trace.ExpertTraceWriter); set by
         # measurement scripts. Records every routing decision of the forward pass.
         self.trace = None
+        # LAZYLORA_GPU=1: routed-expert decode and matmuls on the CUDA device (fp32). The
+        # packed 17.5 MB expert crosses PCIe, is decoded with the LUT on the GPU and
+        # multiplied there; everything else (attention, shared expert, LoRA) stays on the
+        # CPU. On the GTX 1050 this takes an expert from ~55-120 ms to ~25 ms.
+        self.gpu = bool(HAS_TORCH and os.environ.get("LAZYLORA_GPU", "") == "1" and torch.cuda.is_available())
+        if self.gpu:
+            print(f"[gpu] routed experts on {torch.cuda.get_device_name(0)}", flush=True)
         self.trunk_streamer = LayerTrunkStreamer(
             self.mmap_streamer,
             device=self.device,
@@ -723,6 +730,12 @@ class LazyLoRATrainer:
         """(W1, W3, W2) as fp32 tensors when the widened path is used, else None."""
         if not e.packed:
             return (e.gate_proj.float(), e.up_proj.float(), e.down_proj.float())
+        if self.gpu:
+            from lazy_lora.streaming.expert_streamer import _dequantize_mxfp4
+            return tuple(_dequantize_mxfp4(p.to("cuda", non_blocking=True), s.to("cuda", non_blocking=True),
+                                           out_dtype=torch.float32)
+                         for p, s in ((e.gate_packed, e.gate_scale), (e.up_packed, e.up_scale),
+                                      (e.down_packed, e.down_scale)))
         if rows > FUSED_MAX_ROWS:
             k = native_kernel()
             return (k.dequant(e.gate_packed, e.gate_scale), k.dequant(e.up_packed, e.up_scale),
@@ -732,6 +745,16 @@ class LazyLoRATrainer:
     def _expert_forward(self, bundle, e, x, mats):
         """gate, up, situ, down (all fp32) for the rows x [n, 3584] of one expert."""
         xf = x.float()
+        if mats is not None and mats[0].is_cuda:
+            W1, W3, W2 = mats
+            xg = xf.to("cuda", non_blocking=True)
+            gate = F.linear(xg, W1) + bundle.gate_lora.forward_lora_only(x).float().to("cuda")
+            up = F.linear(xg, W3) + bundle.up_lora.forward_lora_only(x).float().to("cuda")
+            situ = situ_glu_forward(gate, up)
+            down = F.linear(situ, W2)
+            gate, up, situ, down = gate.cpu(), up.cpu(), situ.cpu(), down.cpu()
+            down = down + bundle.down_lora.forward_lora_only(situ).float()
+            return gate, up, situ, down
         if mats is not None:
             W1, W3, W2 = mats
             gate = F.linear(xf, W1)
@@ -755,6 +778,8 @@ class LazyLoRATrainer:
         d = d_out.float()
         if mats is not None:
             W = {"gate": mats[0], "up": mats[1], "down": mats[2]}[which]
+            if W.is_cuda:
+                return (d.to("cuda", non_blocking=True) @ W).cpu()
             return d @ W
         k = native_kernel()
         p, s = {"gate": (e.gate_packed, e.gate_scale), "up": (e.up_packed, e.up_scale),
