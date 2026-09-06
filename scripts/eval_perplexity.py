@@ -32,6 +32,9 @@ def main():
     ev = os.path.join(cfg.paths.workspace_dir, "eval")
     commit = subprocess.run(["git", "-C", os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
+    sys.path.insert(0, cfg.paths.base_model_dir)
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(cfg.paths.base_model_dir, trust_remote_code=True)
     trainer = LazyLoRATrainer(cfg)
     if args.checkpoint:
         meta = trainer.load_checkpoint(args.checkpoint)
@@ -58,15 +61,20 @@ def main():
                 tgt = torch.tensor([chunk], dtype=torch.long)
                 loss, _ = compute_cross_entropy_loss(logits, tgt, ignore_index=cfg.model.pad_token_id)
                 acc = float((logits[0].float().argmax(-1) == tgt[0]).float().mean())
+            # per-token perplexity is not comparable across tokenizations (Turkish needs ~1.7x
+            # the tokens of English for the same text), bits per byte of the decoded text is
+            n_bytes = len(tok.decode(chunk).encode("utf-8"))
+            bpb = float(loss) * args.chunk / (n_bytes * 0.6931471805599453)
             rec = {"tag": args.tag, "commit": commit, "checkpoint": args.checkpoint, "lang": lang, "chunk": c,
-                   "tokens": args.chunk, "loss": round(float(loss), 4),
-                   "perplexity": round(float(torch.exp(loss)), 3), "top1_acc": round(acc, 4),
+                   "tokens": args.chunk, "bytes": n_bytes, "loss": round(float(loss), 4),
+                   "perplexity": round(float(torch.exp(loss)), 3), "bits_per_byte": round(bpb, 4),
+                   "top1_acc": round(acc, 4),
                    "seconds": round(time.time() - t0, 1),
                    "peak_rss_gb": round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1e6, 2),
                    "date": time.strftime("%Y-%m-%d %H:%M")}
             with open(out_path, "a") as f:
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            print(f"{lang} chunk {c}: loss {rec['loss']}  ppl {rec['perplexity']}  top1 {rec['top1_acc']}  "
+            print(f"{lang} chunk {c}: loss {rec['loss']}  ppl {rec['perplexity']}  bpb {rec['bits_per_byte']}  top1 {rec['top1_acc']}  "
                   f"{rec['seconds']:.0f}s  RSS {rec['peak_rss_gb']} GB", flush=True)
             trainer.act_buffer.clean_cache()
     trainer.close()

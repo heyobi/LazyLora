@@ -584,3 +584,46 @@ süpürme başına, token başına değil (rapor §3.2 doğrulandı).
   gather ve fazladan projeksiyon okumasının kaldırılması birlikte ~6 kat. K6 ve batch=2048
   ile raporun ~455 token/saat hedefi ulaşılabilir görünüyor.
 - İzler: `traces/profile_{128,512,1024}_2026-09-06/`.
+
+---
+
+## 17. Deney 9: Beş Metin, 92 MoE Katmanı, Üç Dil ve Kod (6 Eylül 2026)
+
+Model tamamlandıktan sonra izler 93 katmana genişletildi; füzyonlu çekirdekle metin başına
+1.3-1.9 saat. İzler `traces/*_L93_2026-09-06/`, her biri `analysis.md` ile.
+
+| metin | token | benzersiz/tekdüze (92 katman ort.) | katman 1 | katman 46 | katman 92 | top100 payı | entropi (bit) |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Çince paragraf | 111 | 0.43 | 555 | 223 | 200 | 0.76 | 7.27 |
+| Python kodu | 167 | 0.54 | 705 | 450 | 533 | 0.68 | 7.70 |
+| Türkçe haber | 261 | 0.56 | 667 | 326 | 458 | 0.71 | 7.50 |
+| İngilizce paragraf | 159 | 0.50 | 690 | 295 | 453 | 0.71 | 7.54 |
+| Türkçe paragraf | 264 | 0.53 | 664 | 306 | 453 | 0.74 | 7.37 |
+
+**Derinlik profili** (N=110 ön ek, 5 metin ort.): katman 1-36'da ~430 benzersiz uzman,
+37-48'de 304, 49-60'ta 243 (en yoğun bölge), 61-72'de 338, 73-92'de ~295. Yoğunlaşma tek
+yönlü artmıyor; 49-60 arasında bir çukur, sonra hafif genişleme var.
+
+**Alan, dilden daha belirleyici.** 55 token'lık eşit pencerelerde benzersiz uzman kümelerinin
+Jaccard'ı (92 katman ort.): TR/EN 0.39, TR/ZH 0.35, EN/ZH 0.38; aynı metnin iki yarısı 0.34-0.37.
+Ama düz yazı ile Python kodu arasında 0.20-0.21: kod, dil farkının iki katı uzaklıkta. Türkçe
+paragraf ile Türkçe haber arasında 0.30, yani aynı dilde bile içerik türü dil kadar etkili.
+Sonuç: yönlendirici dile değil içerik alanına duyarlı; "dil uzmanları" yok, "alan uzmanları"
+var.
+
+**Uçtan uca sağlık.** 93 katmanın sonunda son norm + lm_head ile ölçülen sonraki-token
+performansı: İngilizce paragraf loss 1.776, perplexity 5.90, top-1 %53; Türkçe paragraf loss
+0.771, perplexity 2.16, top-1 %77. Türkçenin düşük perplexity'si tokenizer'ın Türkçeyi daha
+küçük parçalara bölmesinden (parça devamları kolay); diller arası adil ölçü bayt başına bit
+olacak (`eval_perplexity.py` bunu da yazar). İleri geçiş bu makinede ilk kez uçtan uca
+doğrulanmış ve anlamlı çıktı vermiştir.
+
+**Tek token'lık dev aktivasyon.** İngilizce ve kod metinlerinde son iki MLA katmanında (91,
+92) tek bir token'ın artık normu 10-20 bine çıkıyor (İngilizcede " front", 32. token; medyan
+78, BOS 275). Türkçe ve Çince paragraflarda görülmedi. Son RMSNorm token bazlı olduğu için
+perplexity etkilenmiyor. Katman 13-92'nin C referansıyla karşılaştırması bu öneki de kapsayacak
+biçimde kuyruğa alındı (`run_cref93.sh`).
+
+**Sıcak uzman önbelleği için ölçü:** aktivasyonların %80'ini kapsayan uzman sayısı katman
+başına 140 (katman 56) ile 461 (katman 1) arasında, medyan 251; toplam 25.157 uzman = 440 GB.
+15 GB'lık NVMe artığı bunun %3'ü. Bütçeye göre tasarruf simülasyonu aşağıda (leave-one-out).
