@@ -25,18 +25,29 @@ from lazy_lora.core.config import synthetic_allowed
 
 
 class ExpertWeightBundle:
-    """Holds weights for a single MoE expert."""
+    """
+    Weights of one MoE expert, in one of two forms:
+
+    * dequantised: gate_proj / up_proj / down_proj as [out, in] tensors (mock experts, the
+      shared expert, and the fallback path), or
+    * packed: the MXFP4 bytes as loaded, (packed, scale) per matrix, consumed directly by
+      lazy_lora.native (no 132 MB widening per expert). `packed` is True in that case.
+    """
     def __init__(
         self,
         expert_idx: int,
-        gate_proj: Union["torch.Tensor", np.ndarray],
-        up_proj: Union["torch.Tensor", np.ndarray],
-        down_proj: Union["torch.Tensor", np.ndarray],
+        gate_proj=None, up_proj=None, down_proj=None,
+        gate_packed=None, gate_scale=None, up_packed=None, up_scale=None,
+        down_packed=None, down_scale=None,
     ):
         self.expert_idx = expert_idx
         self.gate_proj = gate_proj
         self.up_proj = up_proj
         self.down_proj = down_proj
+        self.gate_packed, self.gate_scale = gate_packed, gate_scale
+        self.up_packed, self.up_scale = up_packed, up_scale
+        self.down_packed, self.down_scale = down_packed, down_scale
+        self.packed = gate_packed is not None
 
 
 # FP4 (E2M1) values indexed by the whole nibble: bit 3 is the sign, the low 3 bits pick
@@ -190,6 +201,10 @@ class DynamicExpertStreamer:
         self.moe_intermediate_size = moe_intermediate_size
         # Kimi K3 fuses its 2 shared experts into one module of width 2 * moe_intermediate_size
         self.shared_intermediate_size = shared_intermediate_size or (moe_intermediate_size * 2)
+        # With the native MXFP4 kernel the routed experts are handed over as packed bytes
+        # and never widened here; the reader thread then only reads.
+        from lazy_lora.native import kernel as _native_kernel
+        self.keep_packed = _native_kernel() is not None
 
     @property
     def weight_dtype(self):
@@ -222,6 +237,13 @@ class DynamicExpertStreamer:
             w3_packed = self.mmap_streamer.load_tensor(f"{prefix}w3.weight_packed", target_device=self.device)
             w3_scale = self.mmap_streamer.load_tensor(f"{prefix}w3.weight_scale", target_device=self.device)
 
+            if w1_packed is not None and w1_scale is not None and self.keep_packed:
+                return ExpertWeightBundle(
+                    expert_idx,
+                    gate_packed=w1_packed, gate_scale=w1_scale,
+                    up_packed=w3_packed, up_scale=w3_scale,
+                    down_packed=w2_packed, down_scale=w2_scale,
+                )
             if w1_packed is not None and w1_scale is not None:
                 gate = _dequantize_mxfp4(w1_packed, w1_scale, out_dtype=self.weight_dtype)
                 down = _dequantize_mxfp4(w2_packed, w2_scale, out_dtype=self.weight_dtype)

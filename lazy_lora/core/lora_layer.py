@@ -180,6 +180,7 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
         grad_output: Union["torch.Tensor", np.ndarray],
         input_activation: Union["torch.Tensor", np.ndarray],
         base_weight: Optional[Union["torch.Tensor", np.ndarray]] = None,
+        dx_base: Optional["torch.Tensor"] = None,
     ) -> Tuple[
         Union["torch.Tensor", np.ndarray],
         Union["torch.Tensor", np.ndarray],
@@ -211,12 +212,14 @@ class LazyLoRALinear(nn.Module if HAS_TORCH else object):
 
             # Downstream grad to input: dx = dy @ W_0 + dh @ A
             grad_input = None
-            if base_weight is not None:
+            if dx_base is None and base_weight is not None:
                 # dy @ W_0 in the base weight's own dtype: widening a 3072x3584 expert
                 # matrix to fp32 for every expert would cost more than the matmul itself.
-                dx_base = F.linear(grad_output.view(-1, self.out_features).to(base_weight.dtype), base_weight.t()).to(target_dtype)
+                dx_base = F.linear(grad_output.view(-1, self.out_features).to(base_weight.dtype), base_weight.t())
+            if dx_base is not None:
+                # dx_base = dy @ W_0 computed by the caller (e.g. the native MXFP4 kernel)
                 dx_lora = F.linear(dh, self.lora_A.t())
-                grad_input = (dx_base + dx_lora).view_as(input_activation)
+                grad_input = (dx_base.view(-1, self.in_features).to(target_dtype) + dx_lora).view_as(input_activation)
                 if grad_input.dtype != input_activation.dtype:
                     grad_input = grad_input.to(input_activation.dtype)
 

@@ -303,3 +303,20 @@ ile kullanabilir.
 
 HDD'deki `/mnt/disk2tb/hamza/k3trunk` (102 GiB) NVMe kopyası doğrulandıktan sonra silinebilir;
 HDD %94 dolu, bu 102 GiB'lik yer açar (karar kullanıcının).
+
+## 15. FÜZYONLU MXFP4 ÇEKİRDEĞİ (6 Eylül 2026)
+
+Profil, katman süresinin diske değil MXFP4 çözmeye gittiğini gösterdi (uzman başına çözme
+289 ms, okuma 190 ms, GEMM N=1024'te ~45 ms). `lazy_lora/native/mxfp4_gemm.c` paketli
+baytları doğrudan tüketen üç C fonksiyonu içerir (`gemm`, `gemm_t`, `dequant`; OpenMP,
+AVX2), `build.sh` ile derlenir, `lazy_lora/native/__init__.py` ctypes ile bağlar ve yoksa
+otomatik derler. Uzman yolu artık fp32: ≤48 satırda füzyonlu çöz-ve-çarp, üstünde C çözücü +
+fp32 sgemm (bu CPU'da fp32 GEMM bf16'dan 3.4 kat hızlı). Okuyucu thread yalnızca okur;
+uzmanlar paketli halde `ExpertWeightBundle.packed=True` olarak taşınır. `LAZYLORA_NO_NATIVE=1`
+eski çözme yoluna döndürür (mock testler ve A/B için).
+
+Doğrulama: katman 1 çıktısı eski yolla 2e-4 göreli farkla aynı (eski yolun bf16 ara
+yuvarlaması); C dökümüyle 13 katman kosinüsleri aynı ya da daha iyi (katman 12: 0.999956);
+K8 katman 1'de 16 LoRA tensörü + h_in + banka geçti (banka yönünde yönlendirme sınırı
+sıçraması görüldü, küçük adımda uyum; harness artık sıçramayı tespit edip adımı küçültür).
+Uzman başına maliyet: 22 satırda 55 ms (eski ~270 ms). 1024 token'da katman 12: 200 → 108 s.

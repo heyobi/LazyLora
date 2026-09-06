@@ -10,3 +10,6 @@
 # bytecode
 __pycache__/
 *.pyc
+
+# native build artefact
+lazy_lora/native/*.so

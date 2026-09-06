@@ -117,19 +117,31 @@ def main():
     worst = 0.0
     results = []
 
-    def pick_eps(analytic):
-        # step so that the predicted change in f is ~target_delta, well above float noise
-        return float(min(0.5, max(1e-4, args.target_delta / max(abs(analytic), 1e-6))))
+    def pick_eps(analytic, cap=0.5):
+        # step so that the predicted change in f is ~target_delta, well above float noise;
+        # `cap` bounds it for activation directions, where a large step flips top-k routing
+        return float(min(cap, max(1e-4, args.target_delta / max(abs(analytic), 1e-6))))
 
     def central(fn, eps):
         return (fn(eps) - fn(-eps)) / (2 * eps)
 
-    def check(label, analytic, fn):
-        """fn(eps) evaluates the loss at +eps along the direction; two step sizes are reported."""
+    def check(label, analytic, fn, cap=0.5):
+        """fn(eps) evaluates the loss at +eps along the direction; two step sizes are reported.
+        If fd(eps) ~ 2 fd(eps/2) the loss jumped (a routing decision flipped inside the
+        step): the direction is retried with a step 8x smaller before being judged."""
         nonlocal worst
-        eps = pick_eps(analytic)
+        eps = pick_eps(analytic, cap)
         fd1 = central(fn, eps)
         fd2 = central(fn, eps / 2)
+        for _ in range(3):
+            ratio = fd2 / fd1 if fd1 != 0 else float("inf")   # a jump makes fd grow as 1/eps
+            if 1.7 < ratio < 2.3 and abs(fd2) > 20 * max(abs(analytic), 1e-9):
+                eps /= 8
+                emit(f"{label:30s} step {eps * 8:.1e} crossed a routing flip (fd scales as 1/eps); retrying with {eps:.1e}")
+                fd1 = central(fn, eps)
+                fd2 = central(fn, eps / 2)
+            else:
+                break
         fd = fd2
         denom = max(abs(analytic), abs(fd), 1e-12)
         rel = abs(analytic - fd) / denom
@@ -161,14 +173,14 @@ def main():
     d = torch.randn_like(h_in)
     d = d / d.norm()
     analytic = float((grad_h_in.to(d.dtype) * d).sum())
-    check("h_in", analytic, lambda eps, d=d: loss_at(h_in + eps * d, bank))
+    check("h_in", analytic, lambda eps, d=d: loss_at(h_in + eps * d, bank), cap=0.01 * float(h_in.norm()))
 
     # bank direction
     if bank is not None:
         d = torch.randn_like(bank)
         d = d / d.norm()
         analytic = float((grad_bank.to(d.dtype) * d).sum())
-        check("bank (all entries)", analytic, lambda eps, d=d: loss_at(h_in, bank + eps * d))
+        check("bank (all entries)", analytic, lambda eps, d=d: loss_at(h_in, bank + eps * d), cap=0.01 * float(bank.norm()))
 
     emit("")
     verdict = "PASS" if worst <= args.tol else "FAIL"

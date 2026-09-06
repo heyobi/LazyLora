@@ -33,6 +33,11 @@ from lazy_lora.trainer.loss import compute_cross_entropy_loss
 from lazy_lora.trainer.optimizer import LazyLoRAOptimizer
 from lazy_lora.monitor.metrics import MetricsTracker
 from lazy_lora.monitor.dashboard import TerminalDashboard
+from lazy_lora.native import kernel as native_kernel
+
+# Rows per expert above which the widened-matrix sgemm beats the fused kernel (measured
+# on the i7-7700HQ: fused ~27 + 1.7*M ms, C decode + sgemm ~60 + 0.5*M ms per expert).
+FUSED_MAX_ROWS = 48
 
 
 if HAS_TORCH:
@@ -707,6 +712,55 @@ class LazyLoRATrainer:
         del latent_up_w, latent_norm_w
         return shared_out + routed_out.view_as(shared_out)
 
+    # ------------------------------------------------------------------ one routed expert
+    #
+    # Everything below runs in float32: on this CPU an fp32 GEMM is 3.4x faster than bf16,
+    # and the packed weights decode exactly into fp32. Two implementations:
+    #   packed  : lazy_lora.native (fused decode+dot for few rows, C decode + sgemm for many)
+    #   widened : the bundle already holds bf16/fp32 matrices (mock experts, fallback)
+
+    def _expert_matrices(self, e, rows: int):
+        """(W1, W3, W2) as fp32 tensors when the widened path is used, else None."""
+        if not e.packed:
+            return (e.gate_proj.float(), e.up_proj.float(), e.down_proj.float())
+        if rows > FUSED_MAX_ROWS:
+            k = native_kernel()
+            return (k.dequant(e.gate_packed, e.gate_scale), k.dequant(e.up_packed, e.up_scale),
+                    k.dequant(e.down_packed, e.down_scale))
+        return None
+
+    def _expert_forward(self, bundle, e, x, mats):
+        """gate, up, situ, down (all fp32) for the rows x [n, 3584] of one expert."""
+        xf = x.float()
+        if mats is not None:
+            W1, W3, W2 = mats
+            gate = F.linear(xf, W1)
+            up = F.linear(xf, W3)
+        else:
+            k = native_kernel()
+            gate = k.gemm(xf, e.gate_packed, e.gate_scale)
+            up = k.gemm(xf, e.up_packed, e.up_scale)
+        gate = gate + bundle.gate_lora.forward_lora_only(x).float()
+        up = up + bundle.up_lora.forward_lora_only(x).float()
+        situ = situ_glu_forward(gate, up)
+        if mats is not None:
+            down = F.linear(situ, mats[2])
+        else:
+            down = native_kernel().gemm(situ, e.down_packed, e.down_scale)
+        down = down + bundle.down_lora.forward_lora_only(situ).float()
+        return gate, up, situ, down
+
+    def _expert_dx(self, e, mats, d_out, which: str):
+        """d_out @ W for one of the expert's matrices ('gate' | 'up' | 'down'), fp32."""
+        d = d_out.float()
+        if mats is not None:
+            W = {"gate": mats[0], "up": mats[1], "down": mats[2]}[which]
+            return d @ W
+        k = native_kernel()
+        p, s = {"gate": (e.gate_packed, e.gate_scale), "up": (e.up_packed, e.up_scale),
+                "down": (e.down_packed, e.down_scale)}[which]
+        return k.gemm_t(d, p, s)
+
     def _routed_experts_forward(self, layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts):
         """
         sum_e w_e(token) * expert_e(h_latent), streaming the experts in disk order.
@@ -728,13 +782,11 @@ class LazyLoRATrainer:
             if rows.numel() == 0:
                 continue
             x = h_latent.index_select(0, rows)
-            e_gate = F.linear(x, e.gate_proj) + bundle.gate_lora.forward_lora_only(x)
-            e_up = F.linear(x, e.up_proj) + bundle.up_lora.forward_lora_only(x)
-            e_situ = situ_glu_forward(e_gate, e_up)
-            e_down = F.linear(e_situ, e.down_proj) + bundle.down_lora.forward_lora_only(e_situ)
+            mats = self._expert_matrices(e, rows.numel())
+            _gate, _up, _situ, e_down = self._expert_forward(bundle, e, x, mats)
             tw = (topk_weights.index_select(0, rows) * mask.index_select(0, rows).to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
-            out.index_add_(0, rows, e_down.float() * tw.float())
-            del e, x, e_gate, e_up, e_situ, e_down
+            out.index_add_(0, rows, e_down * tw.float())
+            del e, x, mats, _gate, _up, _situ, e_down
         return out
 
     def _routed_experts_backward(self, layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts, grad_out):
@@ -756,28 +808,29 @@ class LazyLoRATrainer:
                 if rows.numel() == 0:
                     continue
                 x = h_latent.index_select(0, rows)
-                g_out = grad_out.index_select(0, rows)
+                g_out = grad_out.index_select(0, rows).float()
                 m = mask.index_select(0, rows)
-                gate = F.linear(x, e.gate_proj) + bundle.gate_lora.forward_lora_only(x)
-                up = F.linear(x, e.up_proj) + bundle.up_lora.forward_lora_only(x)
-                situ = situ_glu_forward(gate, up)
-                e_down = F.linear(situ, e.down_proj) + bundle.down_lora.forward_lora_only(situ)
+                mats = self._expert_matrices(e, rows.numel())
+                gate, up, situ, e_down = self._expert_forward(bundle, e, x, mats)
 
-                dot = (g_out.float() * e_down.float()).sum(dim=-1, keepdim=True)     # [n_e, 1]
+                dot = (g_out * e_down).sum(dim=-1, keepdim=True)                     # [n_e, 1]
                 grad_w.index_add_(0, rows, dot * m.to(dot.dtype))
 
                 tw = (topk_weights.index_select(0, rows) * m.to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
-                d_down = (g_out.float() * tw.float()).to(h_latent.dtype)
+                d_down = g_out * tw.float()
 
-                gA, gB, d_situ = bundle.down_lora.compute_lora_gradients(d_down, situ, e.down_proj)
+                gA, gB, d_situ = bundle.down_lora.compute_lora_gradients(
+                    d_down, situ, dx_base=self._expert_dx(e, mats, d_down, "down"))
                 bundle.down_lora.accumulate_grad(gA, gB)
                 d_gate, d_up = situ_glu_backward(d_situ, gate, up)
-                gA, gB, d_in_g = bundle.gate_lora.compute_lora_gradients(d_gate, x, e.gate_proj)
+                gA, gB, d_in_g = bundle.gate_lora.compute_lora_gradients(
+                    d_gate, x, dx_base=self._expert_dx(e, mats, d_gate, "gate"))
                 bundle.gate_lora.accumulate_grad(gA, gB)
-                gA, gB, d_in_u = bundle.up_lora.compute_lora_gradients(d_up, x, e.up_proj)
+                gA, gB, d_in_u = bundle.up_lora.compute_lora_gradients(
+                    d_up, x, dx_base=self._expert_dx(e, mats, d_up, "up"))
                 bundle.up_lora.accumulate_grad(gA, gB)
                 grad_h.index_add_(0, rows, d_in_g.float() + d_in_u.float())
-                del e, x, g_out, gate, up, situ, e_down, d_down, d_situ, d_gate, d_up, d_in_g, d_in_u
+                del e, x, g_out, mats, gate, up, situ, e_down, d_down, d_situ, d_gate, d_up, d_in_g, d_in_u
         return grad_h.to(h_latent.dtype), grad_w.to(topk_weights.dtype)
 
     def _lora_params_of(self, bundle) -> List[Tuple[Any, "torch.Tensor"]]:
