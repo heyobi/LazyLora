@@ -566,3 +566,21 @@ Uyarı: tek paragraf çifti. Yayın için birkaç metin türü ve üçüncü dil
 Okuma ağırlıklı olarak uzmanlardan; gövde NVMe'de olduğu için katman süresi artık uzman
 süpürmesi + hesapla belirleniyor. 264 token 159'dan yalnızca ~%10 daha yavaş: maliyet
 süpürme başına, token başına değil (rapor §3.2 doğrulandı).
+
+### 16.5 Hız ve bellek profili (6 Eylül 2026, katman 0-12, NVMe gövde, gather, boş disk)
+
+| N | 13 katman | MoE katmanı ort. | katman başına okuma | benzersiz uzman ort. | tepe RSS | token/saat (ileri, 93 katmana ölçekli) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 128 | 1484 s | 122 s | 9.1 GB | 450 | 2.89 GB | 41 |
+| 512 | 2407 s | 197 s | 13.6 GB | 708 | 2.98 GB | 101 |
+| 1024 | 2936 s | 238 s | 14.5 GB | 759 | 3.39 GB | 168 |
+
+- Token 8 kat artınca katman süresi yalnızca 2 kat arttı: maliyet süpürme başına. 1024 token'da
+  bile uzmanların ~%15'i hiç okunmuyor (yoğunlaşma).
+- Etkin disk verimi 14.5 GB / 238 s ≈ 61 MB/s; diskin sıralı hızının yarısı. Okuyucu thread
+  hesap sırasında boş kalıyor (K6). Boru hattı ile hedef ~120-150 MB/s, katman süresi ~150 s.
+- RAM: 1024 token'da 3.4 GB. 2048 token bu makinede rahat sığar; K6 sonrası denenmeli.
+- Rapor §3.3'ün "şimdi" satırı (127 token, katman 740 s) bu makinede 122 s oldu: NVMe gövde,
+  gather ve fazladan projeksiyon okumasının kaldırılması birlikte ~6 kat. K6 ve batch=2048
+  ile raporun ~455 token/saat hedefi ulaşılabilir görünüyor.
+- İzler: `traces/profile_{128,512,1024}_2026-09-06/`.
