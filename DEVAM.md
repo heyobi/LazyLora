@@ -320,3 +320,25 @@ yuvarlaması); C dökümüyle 13 katman kosinüsleri aynı ya da daha iyi (katma
 K8 katman 1'de 16 LoRA tensörü + h_in + banka geçti (banka yönünde yönlendirme sınırı
 sıçraması görüldü, küçük adımda uyum; harness artık sıçramayı tespit edip adımı küçültür).
 Uzman başına maliyet: 22 satırda 55 ms (eski ~270 ms). 1024 token'da katman 12: 200 → 108 s.
+
+## 16. DEĞERLENDİRME PROTOKOLÜ (6 Eylül 2026, eğitimden önce sabitlendi)
+
+**Külliyat** (`scripts/build_eval_corpus.py`, `LazyLora_Workspace/eval/`): Türkçe ve İngilizce
+Wikipedia'dan aynı 11 konunun (İstanbul, Anadolu, Güneş Sistemi, Fotosentez, Osmanlı, Kahve,
+Deprem, İklim değişikliği, Matematik, Futbol, Su) düz metin paragrafları, makale başına en
+fazla 400 token, dil başına tam 4096 token. Manifest'te makale ve sürüm numaraları var
+(CC BY-SA 4.0). Eğitim verisinden tamamen ayrık; eğitimde asla kullanılmayacak.
+
+**Ölçüm** (`scripts/eval_perplexity.py`): dil başına iki adet 2048-token'lık dilim, her biri
+tek bir 93 katmanlı ileri geçiş (maliyet süpürme başına). Kayıt: sonraki-token loss, perplexity,
+top-1 doğruluk, süre, tepe RSS, commit ve varsa adaptör checkpoint'i → `eval/results.jsonl`.
+
+1. Birincil metrik: Türkçe perplexity (2 dilim ortalaması), eğitim öncesi ve sonrası.
+2. Kontrol: İngilizce perplexity, aynı ölçümle; unutma / küresel bozulma göstergesi.
+3. Başarı eşiği: taban ölçümünden sonra, eğitimden önce burada yazılacak (X% Türkçe düşüşü,
+   en fazla Y% İngilizce bozulması). Sonradan seçilmez.
+4. Olumsuz sonuç geçerli sonuçtur; nedenleri (adım, rank, sinyal) ölçümle raporlanır.
+5. Yönlendirme değişimi: eğitim öncesi/sonrası izler karşılaştırılır (adaptör yönlendirmeyi kaydırdı mı).
+6. Gradyan sağlığı: her N adımda katman başına LoRA gradyan normları.
+
+Taban ölçümü: kuyruğun sonunda otomatik (`run_eval_baseline.sh`).
