@@ -11,8 +11,7 @@ lazy_lora.monitor.trace). The manifest also carries per-layer seconds and bytes 
 and the peak RSS, so one run doubles as the machine's speed / memory profile.
 
 The model's own tokenizer is required; there is deliberately no byte fallback here.
-Layers 67 and 68 are unavailable while shards 68/69 are missing, so --layers defaults
-to 67 (layers 0..66).
+--layers defaults to all 93 (the checkpoint is complete since 5 September 2026).
 """
 import argparse, os, resource, sys, time
 
@@ -36,7 +35,7 @@ def main():
     g.add_argument("--text")
     g.add_argument("--text-file")
     g.add_argument("--ids")
-    ap.add_argument("--layers", type=int, default=67)
+    ap.add_argument("--layers", type=int, default=93)
     ap.add_argument("--max-tokens", type=int, default=512)
     ap.add_argument("--tag", default="run")
     ap.add_argument("--out-dir", default=None)
