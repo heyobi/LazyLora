@@ -93,6 +93,57 @@ def _with_lora(base, x, lora):
     return base + lora.forward_lora_only(x)
 
 
+KDA_CHUNK = 16
+
+
+def _kda_chunk(state, q, k, v, decay, beta):
+    """
+    The gated delta rule over one chunk of `n` tokens, from state S [B, H, D, D]:
+        S_t = S_{t-1} diag(a_t)
+        S_t = S_t + beta_t * k_t (v_t - S_t^T k_t)^T
+        o_t = S_t^T q_t
+    Returns (new state, outputs [B, n, H, D]).
+    """
+    # Same elementwise formulation as the validated single-loop version (matmul changes
+    # the fp32 summation order, which moved the 13-layer C comparison by ~4e-4).
+    B, H = k.shape[0], k.shape[2]
+    outs = []
+    for t in range(q.shape[1]):
+        state = state * decay[:, t].unsqueeze(-1)
+        k_t = k[:, t]                                                # [B, H, D]
+        read = (state * k_t.unsqueeze(-1)).sum(dim=2)                # S^T k  [B, H, D]
+        err = v[:, t] - read
+        state = state + beta[:, t].view(B, H, 1, 1) * k_t.unsqueeze(-1) * err.unsqueeze(2)
+        outs.append((state * q[:, t].unsqueeze(-1)).sum(dim=2))
+    return state, torch.stack(outs, dim=1)
+
+
+def _kda_recurrence(q, k, v, decay, beta):
+    """
+    Run the recurrence over T tokens in chunks of KDA_CHUNK.
+
+    Under autograd each chunk is a checkpoint: only the chunk-boundary state is kept and
+    the chunk is recomputed during the backward. Without it the graph of a 256-token
+    layer held every per-step [B, H, D, D] intermediate (several GB), pushed the process
+    into swap, and a single layer's backward took a quarter of an hour on one core.
+    """
+    B, T, H, D = q.shape
+    state = torch.zeros(B, H, D, D, dtype=torch.float32, device=q.device)
+    outs = []
+    use_ckpt = torch.is_grad_enabled() and (q.requires_grad or k.requires_grad or v.requires_grad
+                                             or decay.requires_grad or beta.requires_grad)
+    for s in range(0, T, KDA_CHUNK):
+        e = min(T, s + KDA_CHUNK)
+        args = (state, q[:, s:e], k[:, s:e], v[:, s:e], decay[:, s:e], beta[:, s:e])
+        if use_ckpt:
+            from torch.utils.checkpoint import checkpoint
+            state, o = checkpoint(_kda_chunk, *args, use_reentrant=False)
+        else:
+            state, o = _kda_chunk(*args)
+        outs.append(o)
+    return torch.cat(outs, dim=1)
+
+
 def kda_attention(
     h,
     w,
@@ -146,16 +197,7 @@ def kda_attention(
     #   S <- S + beta_t * k_t (v_t - S^T k_t)^T
     #   o_t = S^T q_t
     q = q * (D ** -0.5)
-    state = torch.zeros(B, H, D, D, dtype=torch.float32, device=h.device)
-    outputs = torch.empty(B, T, H, D, dtype=torch.float32, device=h.device)
-    for t in range(T):
-        state = state * decay[:, t].unsqueeze(-1)
-        k_t = k[:, t]                                        # [B, H, D]
-        v_t = v[:, t]
-        read = (state * k_t.unsqueeze(-1)).sum(dim=2)        # [B, H, D]
-        err = v_t - read
-        state = state + beta[:, t].view(B, H, 1, 1) * k_t.unsqueeze(-1) * err.unsqueeze(2)
-        outputs[:, t] = (state * q[:, t].unsqueeze(-1)).sum(dim=2)
+    outputs = _kda_recurrence(q, k, v, decay, beta)
 
     o = outputs.to(h.dtype)
 

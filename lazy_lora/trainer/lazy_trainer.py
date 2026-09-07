@@ -182,6 +182,9 @@ class LazyLoRATrainer:
         # multiplied there; everything else (attention, shared expert, LoRA) stays on the
         # CPU. On the GTX 1050 this takes an expert from ~55-120 ms to ~25 ms.
         self.gpu = bool(HAS_TORCH and os.environ.get("LAZYLORA_GPU", "") == "1" and torch.cuda.is_available())
+        # LAZYLORA_PROFILE=1: per-layer timing of the backward's parts, printed per layer
+        self.profile = os.environ.get("LAZYLORA_PROFILE", "") == "1"
+        self._prof: Dict[str, float] = {}
         if self.gpu:
             print(f"[gpu] routed experts on {torch.cuda.get_device_name(0)}", flush=True)
         self.trunk_streamer = LayerTrunkStreamer(
@@ -801,6 +804,7 @@ class LazyLoRATrainer:
         and changes routing decisions a few layers later.
         """
         out = torch.zeros(h_latent.shape, dtype=torch.float32, device=h_latent.device)
+        t_exp = time.time()
         for exp_id, e in self.expert_streamer.stream_experts(layer_idx, active_experts):
             mask = (topk_indices == exp_id)                                  # [N, top_k]
             rows = mask.any(dim=-1).nonzero(as_tuple=False).squeeze(-1)      # tokens using e
@@ -812,6 +816,7 @@ class LazyLoRATrainer:
             tw = (topk_weights.index_select(0, rows) * mask.index_select(0, rows).to(topk_weights.dtype)).sum(dim=-1, keepdim=True)
             out.index_add_(0, rows, e_down * tw.float())
             del e, x, mats, _gate, _up, _situ, e_down
+        self._prof["experts_fwd"] = self._prof.get("experts_fwd", 0.0) + (time.time() - t_exp)
         return out
 
     def _routed_experts_backward(self, layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts, grad_out):
@@ -826,6 +831,7 @@ class LazyLoRATrainer:
         """
         grad_h = torch.zeros(h_latent.shape, dtype=torch.float32, device=h_latent.device)
         grad_w = torch.zeros(topk_weights.shape, dtype=torch.float32, device=h_latent.device)
+        t_exp = time.time()
         with torch.no_grad():
             for exp_id, e in self.expert_streamer.stream_experts(layer_idx, active_experts):
                 mask = (topk_indices == exp_id)
@@ -856,6 +862,7 @@ class LazyLoRATrainer:
                 bundle.up_lora.accumulate_grad(gA, gB)
                 grad_h.index_add_(0, rows, d_in_g.float() + d_in_u.float())
                 del e, x, g_out, mats, gate, up, situ, e_down, d_down, d_situ, d_gate, d_up, d_in_g, d_in_u
+        self._prof["experts_bwd"] = self._prof.get("experts_bwd", 0.0) + (time.time() - t_exp)
         return grad_h.to(h_latent.dtype), grad_w.to(topk_weights.dtype)
 
     def _lora_params_of(self, bundle) -> List[Tuple[Any, "torch.Tensor"]]:
@@ -895,6 +902,8 @@ class LazyLoRATrainer:
         """
         if not (HAS_TORCH and isinstance(grad_h_out, torch.Tensor)):
             raise RuntimeError("the LazyLoRA engine runs on torch tensors; the NumPy path was removed")
+        t0 = time.time()
+        self._prof = {}
         h_in = self.act_buffer.load_activation(layer_idx, target_device=self.device, as_torch=True)
         if h_in is None:
             raise RuntimeError(f"activation of layer {layer_idx} is missing from the ring buffer")
@@ -910,13 +919,21 @@ class LazyLoRATrainer:
             if bank is not None:
                 b = bank.detach().clone().requires_grad_(True)
                 leaves.append(b)
+            t1 = time.time()
             out, _ = self._run_layer(layer_idx, x, b)
+            t2 = time.time()
             grads = torch.autograd.grad(
                 outputs=out, inputs=leaves + params,
                 grad_outputs=grad_h_out.to(out.dtype),
                 allow_unused=True, retain_graph=False,
             )
+            t3 = time.time()
         del out
+        if self.profile:
+            eb = self._prof.get("experts_bwd", 0.0)
+            print(f"\n[profile] layer {layer_idx}: load {t1 - t0:.1f}s | replay fwd {t2 - t1:.1f}s "
+                  f"(experts fwd {self._prof.get('experts_fwd', 0.0):.1f}s) | autograd {t3 - t2:.1f}s "
+                  f"(experts bwd {eb:.1f}s, rest {t3 - t2 - eb:.1f}s)", flush=True)
         grad_x = grads[0]
         grad_b = grads[1] if b is not None else None
         for (mod, p), g in zip(mods_params, grads[len(leaves):]):
