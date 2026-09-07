@@ -56,8 +56,14 @@ if HAS_TORCH:
         """
 
         @staticmethod
-        def forward(ctx, h_latent, topk_weights, topk_indices, trainer, layer_idx, bundle, active_experts):
-            out = trainer._routed_experts_forward(layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts)
+        def forward(ctx, h_latent, topk_weights, topk_indices, trainer, layer_idx, bundle, active_experts, cached=None):
+            if cached is not None:
+                # The backward replay: the forward pass already computed and saved this
+                # layer's routed sum, so the first of the two expert sweeps is skipped. The
+                # gradients still stream the experts once, in backward().
+                out = cached.to(torch.float32)
+            else:
+                out = trainer._routed_experts_forward(layer_idx, bundle, h_latent, topk_indices, topk_weights, active_experts)
             ctx.save_for_backward(h_latent, topk_weights, topk_indices)
             ctx.trainer, ctx.layer_idx, ctx.bundle, ctx.active_experts = trainer, layer_idx, bundle, active_experts
             return out
@@ -68,7 +74,7 @@ if HAS_TORCH:
             grad_h, grad_w = ctx.trainer._routed_experts_backward(
                 ctx.layer_idx, ctx.bundle, h_latent, topk_indices, topk_weights, ctx.active_experts, grad_out
             )
-            return grad_h, grad_w, None, None, None, None, None
+            return grad_h, grad_w, None, None, None, None, None, None
 
 
 class LoRALayerBundle:
@@ -186,6 +192,10 @@ class LazyLoRATrainer:
         # LAZYLORA_PROFILE=1: per-layer timing of the backward's parts, printed per layer
         self.profile = os.environ.get("LAZYLORA_PROFILE", "") == "1"
         self._prof: Dict[str, float] = {}
+        # Routed-expert sums saved by the forward pass (per layer, a few MB) and handed to
+        # the backward replay so it streams the experts once instead of twice.
+        self.cache_routed = True
+        self._routed_cache: Dict[int, "torch.Tensor"] = {}
         if self.gpu:
             print(f"[gpu] routed experts on {torch.cuda.get_device_name(0)}", flush=True)
         self.trunk_streamer = LayerTrunkStreamer(
@@ -717,7 +727,10 @@ class LazyLoRATrainer:
         h_latent = linear32(x.reshape(-1, d_h).to(self.compute_dtype), latent_down_w)         # [N, 3584]
         del latent_down_w
         routed_latent = RoutedExpertsFunction.apply(
-            h_latent, topk_weights, topk_indices, self, layer_idx, bundle, active_experts)
+            h_latent, topk_weights, topk_indices, self, layer_idx, bundle, active_experts,
+            self._routed_cache.get(layer_idx))
+        if self.cache_routed and not torch.is_grad_enabled():
+            self.act_buffer.save_activation(layer_idx, routed_latent, tag="_moe")
         routed_latent = RMSNormFunction.forward(routed_latent, latent_norm_w.to(routed_latent.dtype))
         routed_out = linear32(routed_latent.to(latent_up_w.dtype), latent_up_w)                 # [N, 7168]
         del latent_up_w, latent_norm_w
@@ -913,6 +926,9 @@ class LazyLoRATrainer:
         mods_params = self._lora_params_of(bundle)
         params = [p for _, p in mods_params]
 
+        cached = self.act_buffer.load_activation(layer_idx, target_device=self.device, as_torch=True, tag="_moe") \
+            if self.cache_routed else None
+        self._routed_cache = {layer_idx: cached} if cached is not None else {}
         with torch.enable_grad():
             x = h_in.detach().clone().requires_grad_(True)
             leaves = [x]
@@ -922,6 +938,8 @@ class LazyLoRATrainer:
                 leaves.append(b)
             t1 = time.time()
             out, _ = self._run_layer(layer_idx, x, b)
+        self._routed_cache = {}
+        with torch.enable_grad():
             t2 = time.time()
             grads = torch.autograd.grad(
                 outputs=out, inputs=leaves + params,

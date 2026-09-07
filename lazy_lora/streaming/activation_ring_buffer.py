@@ -33,8 +33,8 @@ class ActivationRingBuffer:
         self._layer_shapes = {}
         self._layer_dtypes = {}
 
-    def _get_path(self, layer_idx: int) -> str:
-        return os.path.join(self.cache_dir, f"act_layer_{layer_idx:03d}.bin")
+    def _get_path(self, layer_idx: int, tag: str = "") -> str:
+        return os.path.join(self.cache_dir, f"act_layer_{layer_idx:03d}{tag}.bin")
 
     def get_activation_path(self, layer_idx: int) -> str:
         """Public getter for layer activation binary file path."""
@@ -44,11 +44,13 @@ class ActivationRingBuffer:
         self,
         layer_idx: int,
         activation: Union["torch.Tensor", np.ndarray],
+        tag: str = "",
     ) -> None:
         """
-        Stream layer boundary tensor directly to binary disk buffer on D: drive.
+        Stream a layer-boundary tensor (or, with `tag`, another per-layer tensor such as
+        the routed-expert sum) to the binary disk buffer.
         """
-        filepath = self._get_path(layer_idx)
+        filepath = self._get_path(layer_idx, tag)
         
         if HAS_TORCH and isinstance(activation, torch.Tensor):
             # Move to cpu numpy view for contiguous binary save
@@ -89,11 +91,12 @@ class ActivationRingBuffer:
         layer_idx: int,
         target_device: str = "cpu",
         as_torch: bool = True,
+        tag: str = "",
     ) -> Optional[Union["torch.Tensor", np.ndarray]]:
         """
-        Fast recovery of layer activation from binary disk buffer on D: drive.
+        Fast recovery of a saved per-layer tensor from the binary disk buffer.
         """
-        filepath = self._get_path(layer_idx)
+        filepath = self._get_path(layer_idx, tag)
         if not os.path.exists(filepath):
             return None
 
@@ -129,11 +132,14 @@ class ActivationRingBuffer:
             return arr
 
     def clean_cache(self) -> None:
-        """Remove all activation temporary files from D: drive."""
-        for layer_idx in range(self.num_layers):
-            p = self._get_path(layer_idx)
-            if os.path.exists(p):
+        """Remove every file of this run's activation directory (all layers, all tags)."""
+        try:
+            names = os.listdir(self.cache_dir)
+        except OSError:
+            return
+        for name in names:
+            if name.startswith("act_layer_") and name.endswith(".bin"):
                 try:
-                    os.remove(p)
+                    os.remove(os.path.join(self.cache_dir, name))
                 except Exception:
                     pass
