@@ -218,6 +218,8 @@ class TrainingConfig:
     max_steps: int = 2000
     save_steps: int = 100
     keep_checkpoints: int = 3             # newest N step checkpoints kept on the NVMe (~1.8 GB each)
+    pack_samples: bool = True             # several samples per max_seq_len sequence (cost is per sweep)
+    mask_prompt: bool = True              # loss only on the assistant tokens
     logging_steps: int = 1
     eval_steps: int = 50
     adam_beta1: float = 0.9

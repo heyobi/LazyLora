@@ -1198,7 +1198,8 @@ class LazyLoRATrainer:
         return {"step": int(payload.get("step", 0)), "data_cursor": int(payload.get("data_cursor", 0)),
                 "format": payload.get("format", 1)}
 
-    def train(self, num_steps: Optional[int] = None, resume_from: Optional[str] = None) -> List[float]:
+    def train(self, num_steps: Optional[int] = None, resume_from: Optional[str] = None,
+              data_file: Optional[str] = None) -> List[float]:
         """
         Executes full LazyLoRA Out-of-Core training loop.
         Streams Turkish training dataset, processes micro-batches, updates weights,
@@ -1211,7 +1212,9 @@ class LazyLoRATrainer:
 
         target_steps = num_steps or self.config.training.max_steps
         dataset_mgr = TurkishDatasetManager(self.config.paths.dataset_dir)
-        train_file = dataset_mgr.train_file
+        train_file = data_file or dataset_mgr.train_file
+        if data_file and not os.path.exists(data_file):
+            raise FileNotFoundError(f"training data not found: {data_file}")
         if not os.path.exists(train_file):
             print(f"[*] Turkish dataset not found, generating curated dataset at: {train_file}")
             dataset_mgr.generate_curated_samples(target_samples=max(200, target_steps * 2))
@@ -1249,6 +1252,8 @@ class LazyLoRATrainer:
                 as_torch=HAS_TORCH,
                 device=self.device,
                 skip_samples=skip,
+                pack=self.config.training.pack_samples,
+                mask_prompt=self.config.training.mask_prompt,
             ):
                 saw_batch = True
                 step += 1
@@ -1288,6 +1293,11 @@ def main():
                         help="Run the forward pass and report the loss, without backward or optimizer")
     parser.add_argument("--resume", default=None,
                         help="Checkpoint to resume from (weights, optimizer, RNG and data cursor)")
+    parser.add_argument("--data", default=None, help="Training JSONL (instruction/input/output records)")
+    parser.add_argument("--warmup", type=int, default=None, help="Warmup steps (default from config: 50)")
+    parser.add_argument("--save-steps", type=int, default=None, help="Checkpoint every N steps")
+    parser.add_argument("--no-pack", action="store_true", help="One sample per step instead of packing")
+    parser.add_argument("--no-mask", action="store_true", help="Train on prompt tokens as well")
     args = parser.parse_args()
 
     cfg = get_default_config()
@@ -1299,10 +1309,18 @@ def main():
         cfg.streaming.device = args.device
     if args.seq_len:
         cfg.training.max_seq_len = args.seq_len
+    if args.warmup is not None:
+        cfg.training.warmup_steps = args.warmup
+    if args.save_steps is not None:
+        cfg.training.save_steps = args.save_steps
+    if args.no_pack:
+        cfg.training.pack_samples = False
+    if args.no_mask:
+        cfg.training.mask_prompt = False
 
     trainer = LazyLoRATrainer(config=cfg)
     trainer.forward_only = args.forward_only
-    trainer.train(num_steps=args.steps, resume_from=args.resume)
+    trainer.train(num_steps=args.steps, resume_from=args.resume, data_file=args.data)
 
 
 if __name__ == "__main__":

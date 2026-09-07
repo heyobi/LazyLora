@@ -21,7 +21,9 @@ from lazy_lora.trainer.loss import compute_cross_entropy_loss  # noqa: E402
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--lang", default="tr,en")
+    ap.add_argument("--lang", default="tr,en", help="(legacy) languages; each maps to <lang>_wiki")
+    ap.add_argument("--corpus", default=None,
+                    help="comma-separated corpus names under eval/ (e.g. tr_wiki,en_wiki,tr_news); overrides --lang")
     ap.add_argument("--chunk", type=int, default=2048)
     ap.add_argument("--chunks", type=int, default=2, help="chunks per language (corpus has 4096 tokens)")
     ap.add_argument("--checkpoint", default=None, help="LoRA checkpoint to load; none = base model")
@@ -41,8 +43,9 @@ def main():
         print(f"loaded {args.checkpoint} (step {meta['step']})", flush=True)
 
     out_path = os.path.join(ev, "results.jsonl")
-    for lang in args.lang.split(","):
-        ids_all = json.load(open(os.path.join(ev, f"{lang}_wiki_ids.json")))
+    corpora = args.corpus.split(",") if args.corpus else [f"{l}_wiki" for l in args.lang.split(",")]
+    for lang in corpora:
+        ids_all = json.load(open(os.path.join(ev, f"{lang}_ids.json")))
         for c in range(args.chunks):
             chunk = ids_all[c * args.chunk:(c + 1) * args.chunk]
             if len(chunk) < args.chunk:
