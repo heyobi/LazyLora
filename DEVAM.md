@@ -342,3 +342,33 @@ top-1 doğruluk, süre, tepe RSS, commit ve varsa adaptör checkpoint'i → `eva
 6. Gradyan sağlığı: her N adımda katman başına LoRA gradyan normları.
 
 Taban ölçümü: kuyruğun sonunda otomatik (`run_eval_baseline.sh`).
+
+## 17. GERİ GEÇİŞ HIZI VE İLK TAM EĞİTİM ADIMI (7-8 Eylül 2026)
+
+İlk tam adım (6 Eylül gecesi) geri geçişte katman başına ~17 dk ile takılıp durduruldu.
+İki neden bulundu ve düzeltildi:
+1. KDA özyinelemesinin autograd tekrarı her adımın ara matrislerini saklıyordu (katman
+   başına GB'lar, swap). `attention.py`: özyineleme 16 token'lık parçalarda
+   `torch.utils.checkpoint` ile; ileri geçiş bit bit aynı.
+2. bf16 ağırlıklı matmul'lar bu CPU'da PyTorch'un yavaş yedek GEMM'ine düşüyordu
+   (`cpublas_gemm_impl`; katman 3 geri geçişinin 808 s'sinin 765'i). `core/linear32.py`:
+   donuk ağırlık bf16 kalır, çarpım fp32'de; dikkat, paylaşılan uzman, latent, dense MLP,
+   lm_head bunu kullanır. Doğruluk fp32 referansa göre değişmedi (3.4e-3 vs 3.5e-3).
+3. Ek: ileri geçişin uzman toplamı (`act_layer_NNN_moe.bin`) geri geçiş tekrarında
+   kullanılıyor; katman başına uzman süpürmesi ikiden bire indi.
+
+Katman geri geçişi, 256 token, GPU: katman 3 858 → 50 s, katman 1 ~1000 → 101 s,
+katman 0 22 s. Tepe RAM 3.7 GB.
+
+**İlk tam adım (7-8 Eylül gecesi, 256 token, GPU):** 4 s 31 dk (ileri ~1.5, geri ~2.9),
+tepe RSS 6.24 GB, ileri loss 2.945 (perplexity 19.0), checkpoint 1.8 GB
+(`/mnt/nvme/lazylora/checkpoints/lazy_lora_step_00001.pt`, 1482 LoRA tensörü + Adam
+momentleri), 741 B matrisinin tamamı güncellenmiş. Motor uçtan uca eğitiyor.
+
+**Taban değerlendirmesi (`eval/results.jsonl`, 2048 token Wikipedia dilimleri):**
+TR loss 0.593 / ppl 1.81 / 0.311 bit/bayt / top-1 %84; EN loss 0.637 / ppl 1.89 /
+0.194 bit/bayt / top-1 %85. İkisi de ezber düzeyinde (Wikipedia ön eğitimde); bayt başına
+bit farkı (TR 1.6× EN) anlamlı. Eşik için haber tabanlı, kesim tarihi sonrası bir Türkçe
+dilim eklenecek; Wikipedia dilimleri "ezber/unutma kontrolü" olarak kalır.
+
+Projeksiyon: 1024 token'da adım ~7-8 s; 4 haftada ~90 adım ≈ 90 bin token.
