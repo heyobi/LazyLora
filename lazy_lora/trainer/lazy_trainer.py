@@ -34,6 +34,7 @@ from lazy_lora.trainer.optimizer import LazyLoRAOptimizer
 from lazy_lora.monitor.metrics import MetricsTracker
 from lazy_lora.monitor.dashboard import TerminalDashboard
 from lazy_lora.native import kernel as native_kernel
+from lazy_lora.core.linear32 import linear32
 
 # Rows per expert above which the widened-matrix sgemm beats the fused kernel (measured
 # on the i7-7700HQ: fused ~27 + 1.7*M ms, C decode + sgemm ~60 + 0.5*M ms per expert).
@@ -407,7 +408,7 @@ class LazyLoRATrainer:
             for start, end, w in self._lm_head_bands():
                 if w.dtype != hidden_state.dtype:
                     w = w.to(hidden_state.dtype)
-                part = F.linear(hidden_state, w)
+                part = linear32(hidden_state, w)
                 if logits is None:
                     logits = torch.zeros(
                         (*hidden_state.shape[:-1], vocab_sz), dtype=part.dtype, device=part.device
@@ -430,7 +431,7 @@ class LazyLoRATrainer:
             grad_h = None
             for start, end, w in self._lm_head_bands():
                 g_band = grad_logits[..., start:end].to(w.dtype)
-                part = F.linear(g_band, w.t())
+                part = torch.matmul(g_band.float(), w.float()).to(g_band.dtype)
                 grad_h = part if grad_h is None else grad_h + part
                 del part, g_band
             return grad_h
@@ -594,15 +595,15 @@ class LazyLoRATrainer:
         gate_w = self._load_dense_weight(layer_idx, "gate_proj", (d_mid, d_in))
         if h_norm.dtype != gate_w.dtype:
             h_norm = h_norm.to(gate_w.dtype)
-        gate = F.linear(h_norm, gate_w) + bundle.dense_gate_lora.forward_lora_only(h_norm)
+        gate = linear32(h_norm, gate_w) + bundle.dense_gate_lora.forward_lora_only(h_norm)
         del gate_w
         up_w = self._load_dense_weight(layer_idx, "up_proj", (d_mid, d_in))
-        up = F.linear(h_norm, up_w) + bundle.dense_up_lora.forward_lora_only(h_norm)
+        up = linear32(h_norm, up_w) + bundle.dense_up_lora.forward_lora_only(h_norm)
         del up_w
         situ = situ_glu_forward(gate, up)
         del gate, up
         down_w = self._load_dense_weight(layer_idx, "down_proj", (d_in, d_mid))
-        mlp_out = F.linear(situ, down_w) + bundle.dense_down_lora.forward_lora_only(situ)
+        mlp_out = linear32(situ, down_w) + bundle.dense_down_lora.forward_lora_only(situ)
         del down_w, situ
         return mlp_out
 
@@ -690,10 +691,10 @@ class LazyLoRATrainer:
         """
         s_bundle = self.expert_streamer.get_expert(layer_idx, 0, is_shared=True)
         x = h_moe_norm if h_moe_norm.dtype == s_bundle.gate_proj.dtype else h_moe_norm.to(s_bundle.gate_proj.dtype)
-        s_gate = F.linear(x, s_bundle.gate_proj) + bundle.shared_gate_lora.forward_lora_only(x)
-        s_up = F.linear(x, s_bundle.up_proj) + bundle.shared_up_lora.forward_lora_only(x)
+        s_gate = linear32(x, s_bundle.gate_proj) + bundle.shared_gate_lora.forward_lora_only(x)
+        s_up = linear32(x, s_bundle.up_proj) + bundle.shared_up_lora.forward_lora_only(x)
         s_situ = situ_glu_forward(s_gate, s_up)
-        shared_out = F.linear(s_situ, s_bundle.down_proj) + bundle.shared_down_lora.forward_lora_only(s_situ)
+        shared_out = linear32(s_situ, s_bundle.down_proj) + bundle.shared_down_lora.forward_lora_only(s_situ)
         del s_bundle, s_gate, s_up, s_situ
 
         prefix = f"model.layers.{layer_idx}.block_sparse_moe."
@@ -713,12 +714,12 @@ class LazyLoRATrainer:
         latent_down_w = latent_down_w.to(self.compute_dtype)
         latent_up_w = latent_up_w.to(self.compute_dtype)
 
-        h_latent = F.linear(x.reshape(-1, d_h).to(self.compute_dtype), latent_down_w)          # [N, 3584]
+        h_latent = linear32(x.reshape(-1, d_h).to(self.compute_dtype), latent_down_w)         # [N, 3584]
         del latent_down_w
         routed_latent = RoutedExpertsFunction.apply(
             h_latent, topk_weights, topk_indices, self, layer_idx, bundle, active_experts)
         routed_latent = RMSNormFunction.forward(routed_latent, latent_norm_w.to(routed_latent.dtype))
-        routed_out = F.linear(routed_latent.to(latent_up_w.dtype), latent_up_w)                  # [N, 7168]
+        routed_out = linear32(routed_latent.to(latent_up_w.dtype), latent_up_w)                 # [N, 7168]
         del latent_up_w, latent_norm_w
         return shared_out + routed_out.view_as(shared_out)
 

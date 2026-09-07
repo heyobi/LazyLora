@@ -23,6 +23,7 @@ import numpy as np
 try:
     import torch
     import torch.nn.functional as F
+    from lazy_lora.core.linear32 import linear32, conv1d32
     HAS_TORCH = True
 except ImportError:  # pragma: no cover - torch is required for the real engine
     HAS_TORCH = False
@@ -82,7 +83,7 @@ def short_convolution(x, weight):
     kernel = weight.shape[-1]
     xt = x.transpose(1, 2)                       # [B, C, T]
     xt = F.pad(xt, (kernel - 1, 0))              # causal left padding
-    y = F.conv1d(xt, weight.to(xt.dtype), groups=x.shape[-1])
+    y = conv1d32(xt, weight, groups=x.shape[-1])
     return F.silu(y.transpose(1, 2))
 
 
@@ -166,9 +167,9 @@ def kda_attention(
     B, T, _ = h.shape
     H, D = num_heads, head_dim
 
-    q = short_convolution(_with_lora(F.linear(h, w.q_proj), h, q_lora), w.q_conv1d)
-    k = short_convolution(F.linear(h, w.k_proj), w.k_conv1d)
-    v = short_convolution(_with_lora(F.linear(h, w.v_proj), h, v_lora), w.v_conv1d)
+    q = short_convolution(_with_lora(linear32(h, w.q_proj), h, q_lora), w.q_conv1d)
+    k = short_convolution(linear32(h, w.k_proj), w.k_conv1d)
+    v = short_convolution(_with_lora(linear32(h, w.v_proj), h, v_lora), w.v_conv1d)
 
     q = l2_norm(q.view(B, T, H, D).float())
     k = l2_norm(k.view(B, T, H, D).float())
@@ -183,14 +184,14 @@ def kda_attention(
     #   decay = exp(g)
     #
     # The bound is built into the sigmoid rather than applied as a clamp afterwards.
-    z = F.linear(F.linear(h, w.f_a_proj), w.f_b_proj).view(B, T, H, D).float()
+    z = linear32(linear32(h, w.f_a_proj), w.f_b_proj).view(B, T, H, D).float()
     z = z + w.dt_bias.view(1, 1, H, D).float()
     a = torch.exp(w.A_log.float()[:H]).view(1, 1, H, 1)
     lb = gate_lower_bound if gate_lower_bound is not None else -5.0
     g = lb * torch.sigmoid(a * z)
     decay = torch.exp(g)                                     # [B, T, H, D]
 
-    beta = torch.sigmoid(F.linear(h, w.b_proj).float())      # [B, T, H]
+    beta = torch.sigmoid(linear32(h, w.b_proj).float())      # [B, T, H]
 
     # Gated delta rule, one token at a time, with q pre-scaled by d_k^-0.5:
     #   S <- S * diag(decay_t)
@@ -202,10 +203,10 @@ def kda_attention(
     o = outputs.to(h.dtype)
 
     # Sigmoid-gated output RMSNorm over the head dimension, then output projection
-    gate = F.linear(h, w.g_proj).view(B, T, H, D)
+    gate = linear32(h, w.g_proj).view(B, T, H, D)
     o = rms_norm(o, w.o_norm, eps=eps) * torch.sigmoid(gate.float()).to(o.dtype)
     o = o.reshape(B, T, H * D)
-    return F.linear(o, w.o_proj)
+    return linear32(o, w.o_proj)
 
 
 def mla_attention(
@@ -229,15 +230,15 @@ def mla_attention(
     q_head_dim = qk_nope_head_dim + qk_rope_head_dim
     scaling = q_head_dim ** -0.5
 
-    q_latent = rms_norm(F.linear(h, w.q_a_proj), w.q_a_layernorm, eps=eps)
-    q = _with_lora(F.linear(q_latent, w.q_b_proj), q_latent, q_lora)
+    q_latent = rms_norm(linear32(h, w.q_a_proj), w.q_a_layernorm, eps=eps)
+    q = _with_lora(linear32(q_latent, w.q_b_proj), q_latent, q_lora)
     q = q.view(B, T, H, q_head_dim).transpose(1, 2)
     q_pass, q_rot = torch.split(q, [qk_nope_head_dim, qk_rope_head_dim], dim=-1)
 
-    compressed = F.linear(h, w.kv_a_proj_with_mqa)
+    compressed = linear32(h, w.kv_a_proj_with_mqa)
     k_latent, k_rot = torch.split(compressed, [kv_lora_rank, qk_rope_head_dim], dim=-1)
     kv_latent = rms_norm(k_latent, w.kv_a_layernorm, eps=eps)
-    kv = _with_lora(F.linear(kv_latent, w.kv_b_proj), kv_latent, v_lora)
+    kv = _with_lora(linear32(kv_latent, w.kv_b_proj), kv_latent, v_lora)
     kv = kv.view(B, T, H, qk_nope_head_dim + v_head_dim).transpose(1, 2)
     k_pass, value = torch.split(kv, [qk_nope_head_dim, v_head_dim], dim=-1)
 
@@ -253,5 +254,5 @@ def mla_attention(
 
     o = torch.matmul(probs, value)                            # [B, H, T, v_head_dim]
     o = o.transpose(1, 2).reshape(B, T, H * v_head_dim)
-    o = o * torch.sigmoid(F.linear(h, w.g_proj).float()).to(o.dtype)
-    return F.linear(o, w.o_proj)
+    o = o * torch.sigmoid(linear32(h, w.g_proj).float()).to(o.dtype)
+    return linear32(o, w.o_proj)
