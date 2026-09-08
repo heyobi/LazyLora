@@ -372,3 +372,17 @@ bit farkı (TR 1.6× EN) anlamlı. Eşik için haber tabanlı, kesim tarihi sonr
 dilim eklenecek; Wikipedia dilimleri "ezber/unutma kontrolü" olarak kalır.
 
 Projeksiyon: 1024 token'da adım ~7-8 s; 4 haftada ~90 adım ≈ 90 bin token.
+
+### 16.1 Taban ölçümü ve önceden ilan edilen eşik (8 Eylül 2026)
+
+| Dilim | loss | perplexity | bit/bayt | top-1 |
+|---|---:|---:|---:|---:|
+| TR Wikipedia (2048 tok) | 0.593 | 1.81 | 0.311 | %84 |
+| EN Wikipedia (2048 tok) | 0.637 | 1.89 | 0.194 | %85 |
+| TR haber, 7 Eylül 2026 sonrası (2048 tok, `build_eval_news.py`) | 0.883 | 2.42 | **0.455** | %78 |
+
+Wikipedia dilimleri ezber düzeyinde; birincil metrik haber dilimi (bit/bayt). **Eşik, eğitimden
+önce sabit:** haber bit/bayt ≥ %3 düşer (≤ 0.441) VE İngilizce Wikipedia bit/bayt ≤ %2 artar
+(≤ 0.198). Tutmazsa olumsuz sonuç, nedenleriyle raporlanır. Eğitim verisi:
+`datasets/dolly_tr_400.jsonl` (Dolly-15k-tr, CC BY-SA 3.0), 1024 token paketli, istem maskeli.
+Kanıt koşusu: `run_proof.sh` (5 örnek, 16 adım, lr 1e-3, warmup 2).
