@@ -1,0 +1,7 @@
+[Unit]
+Description=LazyLoRA training watchdog (progress, health, auto-resume, push)
+
+[Service]
+Type=oneshot
+Environment=PYTHONPATH=/home/ibox/calisma/LazyLora
+ExecStart=/home/ibox/venvs/lazylora/bin/python /home/ibox/calisma/LazyLora/scripts/watchdog.py
