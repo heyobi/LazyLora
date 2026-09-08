@@ -660,3 +660,24 @@ geçirildi (61 dk, tepe RSS 5.2 GB, hatasız) ve LazyLoRA aynı diziyi katman ka
 bf16 hesabın 90 katman boyunca biriken farkı, blok sınırlarında sıfırlanıyor). Katman 91-92'deki
 dev aktivasyon **C motorunda da aynı**: modelin kendi davranışı, motor hatası değil. Bu, ileri
 geçişin 13 değil 93 katmanda doğrulandığı ilk kayıttır.
+
+### 17.2 Yerellik tezinin teyidi: çıkarım rejimi ile eğitim rejimi (8 Eylül 2026)
+
+Beş metin × 92 katman izleri üzerinde, ölçüm koşusu gerektirmeden:
+
+- **Zamansal yerellik gerçek ama kısa menzilli.** Ardışık token'ların uzman kümelerinin
+  Jaccard'ı ortalama 0.258 (rastgele: 0.009); mesafeyle düşüyor: d=2 0.21, d=8 0.14,
+  d=32 0.12, d=128 0.10. Bölüm 16.2'deki "öngörülebilirlik yok" ifadesi fazla sert; doğrusu
+  "var, ama kısa menzilli ve tek token'a bağlı".
+- **Çıkarım rejiminde önbellek işe yarıyor.** Token'lar tek tek gelirken katman başına LRU
+  isabet oranı: 64 uzman (1.1 GB/katman) %62, 128 uzman (2.2 GB) %72, 256 uzman (4.5 GB)
+  %80. "Önceki token'ın 16 uzmanını ön-getir" politikası %38 isabet. Yani MoE-Infinity
+  sınıfı sistemlerin varsayımı bu modelde tek-token rejiminde tutuyor.
+- **Eğitim rejiminde çöküyor.** Batch'in okuması gereken uzman, tek token'da 16 (%2),
+  N=16'da 116 (%13), N=64'te 263 (%29), N=128'de 379 (%42), N=256'da 478 (%53); 1024
+  token'da ~%85 (Bölüm 16.5). Birleşim kümesi büyüdükçe önbellek isabetinin tanımı
+  anlamsızlaşıyor: her uzman zaten okunuyor.
+
+Tezin son biçimi: uzman yerelliği tek-token çıkarımı için geçerli ve önbelleklenebilir bir
+özellik; eğitim batch'lerinde ise okunan küme birleşime yakınsadığı için önbellek/ön-getirme
+yerine sıralı süpürme + batch üzerinden amortisman doğru ilkel.
