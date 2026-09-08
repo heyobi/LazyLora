@@ -8,6 +8,7 @@ import os
 import mmap
 import json
 import struct
+import time
 from typing import Dict, Any, Optional, Tuple, List, Union
 import numpy as np
 
@@ -262,12 +263,33 @@ class MmapTensorStreamer:
         want = end - start
         chunks = []
         got = 0
+        attempts = 0
         while got < want:
-            chunk = os.pread(fd, want - got, start + got)
+            try:
+                chunk = os.pread(fd, want - got, start + got)
+            except OSError as exc:
+                # The USB-SATA bridge behind the checkpoint disk throws transient EIO under
+                # sustained load (SMART clean, no CRC errors); the kernel usually recovers
+                # on retry. Wait and retry rather than crash a multi-hour step.
+                attempts += 1
+                if attempts > 12:
+                    raise
+                print(f"\n[!] read error on {os.path.basename(shard_path)} at {start + got} "
+                      f"({exc.strerror}); retry {attempts}/12 in {2 * attempts}s", flush=True)
+                time.sleep(2 * attempts)
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+                self._fds.pop(shard_path, None)
+                fd = self._get_fd(shard_path)
+                continue
             if not chunk:
                 break
             chunks.append(chunk)
             got += len(chunk)
+        if got < want:
+            raise IOError(f"short read on {shard_path}: wanted {want} bytes at {start}, got {got}")
         self.bytes_read += got
         return chunks[0] if len(chunks) == 1 else b"".join(chunks)
 
