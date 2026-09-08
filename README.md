@@ -1,96 +1,117 @@
-# 🚀 LazyLoRA: Out-of-Core MoE LoRA Fine-Tuning Engine for Kimi K3
+# LazyLoRA
 
-**LazyLoRA** is an ultra-low-memory out-of-core fine-tuning engine engineered to train LoRA adapters on massive Mixture-of-Experts (MoE) models—specifically **Moonshot AI's Kimi K3** (2.78-trillion parameters, 93 layers, 896 fine-grained experts + 2 shared experts, ~1.56 TB safetensors weights)—on consumer-grade hardware.
+Out-of-core LoRA fine-tuning and routing measurement for **Kimi K3** (2.78 T parameters,
+93 layers, 896 routed experts per layer, MXFP4 expert weights) on a consumer laptop:
+7.6 GB RAM, 4 CPU cores, a 2 GB GPU, and the 1.56 TB checkpoint on a USB hard disk.
 
----
+The model never fits in memory. Every layer streams its weights from disk, the forward
+pass keeps only one layer resident, layer-boundary activations go to an NVMe ring
+buffer, and the backward pass replays each layer under autograd with the routed experts
+streamed a second time. Only the LoRA adapters (fp32, ~590 MB) and their Adam moments
+live in RAM.
 
-## 🖥️ Target Hardware & Environment Profile
-- **GPU**: NVIDIA GeForce GTX 980 Ti (6 GB VRAM, Maxwell GM200, CC 5.2, ~2816 CUDA Cores)
-- **CPU**: AMD Ryzen 5 3600 (6 Cores / 12 Threads)
-- **Host RAM**: 16 GB Physical (~7.7 GB allocated in WSL2 + Swap)
-- **Mass Storage**: D: Drive NVMe/SSD (1.86 TB total, ~1.2 TB free space)
-- **C: Drive Isolation Guard**: Strict **ZERO-WRITE POLICY** on C: drive (only ~8.5 GB free space). All caches, temporary files, activations, checkpoints, and datasets are strictly routed to `/mnt/d/hamza/LazyLora_Workspace/`.
+*Türkçe okuyucu için: proje günlüğü [DEVAM.md](DEVAM.md), deney kayıtları
+[Bulgular.md](Bulgular.md), fikir havuzu [Fikirler.md](Fikirler.md).*
 
----
+## Status (8 September 2026)
 
-## ⚡ Core Mathematical Optimizations & Architecture
+| | |
+|---|---|
+| Forward pass | matches the independent C implementation [kimi-k3-in-c](https://github.com/FareedKhan-dev/kimi-k3-in-c) layer by layer over **all 93 layers** (cosine ≥ 0.988, 0.99984 at the output) |
+| Backward pass | LoRA gradients, input and residual-bank gradients verified by central finite differences on KDA, MLA and block-boundary layers (relative error ≤ 2e-3) |
+| End-to-end | perplexity 5.9 on an English paragraph, 2.2 on Turkish, 1.9 on Python; first full training step (forward + backward + AdamW + checkpoint) completed |
+| Speed | forward ~100-140 s per layer at 128-1024 tokens, disk-bound at ~115 MB/s; a 256-token training step 4.5 h |
+| Now running | proof-of-learning run (5 examples, 16 steps), then a ~4-week Turkish instruction run |
 
-### 1. Out-of-Core LoRA Parameter Footprint
-In standard LoRA ($W = W_0 + \frac{\alpha}{r} B A$), the frozen base weights $W_0$ require zero gradient storage and zero optimizer states.
-- Trainable matrices $A \in \mathbb{R}^{r \times d_{in}}$ and $B \in \mathbb{R}^{d_{out} \times r}$ with rank $r=16$ occupy only **$\sim 228\text{ KB}$** per projection.
-- Total LoRA parameters across all 93 layers occupy **$< 250\text{ MB}$**, permanently fitting in GPU VRAM alongside the optimizer states!
+## Findings so far
 
-### 2. Expert-Wise Dynamic Streaming & Pipelining (ES-MoE Pattern)
-- For every token in layer $l$, the router selects top-16 out of 896 experts.
-- **Selective Loading**: The $(896 - 16) = 880$ inactive experts are **never read from disk or loaded into RAM/VRAM**.
-- **Double Buffering / Asynchronous Prefetch**: While GPU computes GEMM for layer $l$, a background worker pre-fetches layer $l+1$'s active expert tensors from NVMe storage into pinned host RAM / GPU memory via CUDA streams.
+From routing traces of five texts (Turkish, English, Chinese, Turkish news, Python) over
+all 92 MoE layers ([Bulgular.md](Bulgular.md) §16-17, draft note in
+[docs/measurement_note_draft.md](docs/measurement_note_draft.md)):
 
-### 3. Disk-Backed Activation Ring Buffer on D: Drive
-- Deep 93-layer backpropagation without OOM: Layer boundary hidden states $h_l$ ($l = 0 \dots 92$) are streamed to a memory-mapped binary ring buffer on D: drive (`/mnt/d/hamza/LazyLora_Workspace/activations/`).
-- Forward pass runs $l = 0 \to 92$, caching $h_l$.
-- Backward pass runs $l = 92 \to 0$, reading $h_l$, evaluating analytical LoRA gradients $\nabla_A L, \nabla_B L$, and propagating loss gradients downwards with bounded memory footprint.
+- **Concentration.** A batch touches 43-56 % of the experts a uniform router would;
+  deeper layers concentrate more (200 unique experts at layer 92 for a 111-token text).
+- **Domain over language.** Expert overlap between Turkish, English and Chinese versions
+  of the same paragraph (0.35-0.39) equals the overlap between two unrelated passages in
+  one language; prose vs Python is 0.20. A language signature exists only in layers 1-8.
+- **Locality is per token, not per batch.** Consecutive tokens share 26 % of their
+  experts (random: 1 %) and a 1-2 GB per-layer LRU hits 62-72 % in autoregressive
+  decoding, but a training batch reads the union: 42 % of all experts at 128 tokens,
+  53 % at 256, ~85 % at 1024. Caches and prefetching cannot help training-time
+  offloading; a 200 GB static hot set saves 22 %.
+- **The Turkish tax is in the tokenizer.** The same text costs 1.7× the tokens and 1.6×
+  the bits per byte of English; routing for Turkish is not more diffuse.
+- **Massive activations at the end.** In the last two MLA layers one token per text
+  reaches a residual norm of 10⁴ (median 78); the C reference reproduces it.
 
----
-
-## 📂 Project Architecture
+## Hardware and layout
 
 ```
-LazyLora/
-├── Gorev.txt                              # User task requirement
-├── PlanVeGorev.txt                        # System requirements & paper references
-├── lazy_lora/                             # Core Python/CUDA engine
-│   ├── core/
-│   │   ├── config.py                      # Training & hardware hyperparameters
-│   │   ├── lora_layer.py                  # LoRA linear adapter module
-│   │   ├── moe_router.py                  # Kimi K3 MoE top-16 router & gating
-│   │   └── situ_activation.py             # SiTU & SiTU-GLU activation
-│   ├── streaming/
-│   │   ├── mmap_loader.py                 # Fast mmap safetensors shard reader
-│   │   ├── expert_streamer.py             # Dynamic expert-wise streaming & prefetch
-│   │   ├── trunk_streamer.py              # Layer-wise dense trunk streamer
-│   │   └── activation_ring_buffer.py      # D: drive activation ring buffer
-│   ├── trainer/
-│   │   ├── lazy_trainer.py                # Sequential layer-wise forward & backward engine
-│   │   ├── optimizer.py                   # Low-memory LoRA AdamW optimizer
-│   │   └── loss.py                        # CrossEntropyLoss with label smoothing
-│   ├── dataset/
-│   │   ├── turkish_dataset.py             # Turkish instruction & translation corpus processor
-│   │   └── stream_dataset.py              # Zero-RAM disk-streaming dataset iterator
-│   ├── monitor/
-│   │   ├── dashboard.py                   # Rich visual live terminal UI / monitor
-│   │   └── metrics.py                     # VRAM, RAM, disk I/O, ETA stats collector
-│   ├── profiler/
-│   │   └── hardware.py                    # Hardware analyzer (CPU, GPU, RAM, Disks)
-│   └── tests/
-│       ├── test_hardware_profiler.py      # Test system specs & disk safety
-│       ├── test_moe_routing.py            # Test K3 router invariants & top-16 math
-│       ├── test_lora_gradient.py          # Test LoRA forward/backward gradient math
-│       ├── test_streaming_loader.py       # Test mmap & expert ring buffer
-│       └── test_synthetic_lazy_train.py   # Full synthetic mock training step test
-├── scripts/
-│   ├── run_profile.sh                     # Hardware audit launcher
-│   ├── run_mock_tests.sh                  # Pre-training verification test runner
-│   └── train_lazy_lora.sh                 # Production training runner
-└── README.md
+/home/ibox/calisma/LazyLora        this repository
+/home/ibox/calisma/kimi-k3-in-c    reference C engine (oracle for the forward pass)
+/mnt/disk2tb/hamza/kimi_k3_model_weights   1.56 TB checkpoint (96 safetensors shards)
+/mnt/disk2tb/hamza/LazyLora_Workspace      traces, logs, datasets, eval corpora
+/mnt/nvme/lazylora/k3trunk        packed non-expert weights (108.8 GB), served via an index overlay
+/mnt/nvme/lazylora/{activations,checkpoints}
 ```
 
----
+Every path is a `LAZYLORA_*` environment variable with defaults in
+`lazy_lora/core/config.py`. Two virtualenvs: `~/venvs/lazylora` (CPU torch) and
+`~/venvs/lazylora-cu` (torch cu126 for the routed-expert path on the GTX 1050).
 
-## 🛠️ Usage & Verification
+## Engine
 
-### 1. Run Hardware & Storage Safety Audit
+```
+lazy_lora/
+  core/config.py        paths, model/LoRA/training config, the synthetic-tensor gate
+  core/attention.py     KDA (chunked, checkpointed recurrence) and gated MLA, block-residual mixer
+  core/linear32.py      frozen-weight matmuls in fp32 (bf16 GEMM has no fast path on this CPU)
+  core/lora_layer.py    LoRA A/B (fp32) with analytic gradients
+  native/mxfp4_gemm.c   fused MXFP4 decode-and-dot, transposed product, fast decoder (OpenMP/AVX2)
+  streaming/            pread shard reader with NVMe trunk overlay, packed-expert streamer, activation ring buffer
+  trainer/lazy_trainer.py  one differentiable layer function shared by forward and backward;
+                         routed experts as a single autograd.Function; bank gradient routing;
+                         optional CUDA expert path; full atomic checkpoints with --resume
+  monitor/trace.py      expert access trace format (layer, token, expert, weight) + reader
+scripts/
+  check_shards.py       offline checkpoint integrity (catches empty / truncated shards)
+  compare_with_c_dump.py   replay the C engine's per-layer dump and compare
+  verify_backward.py    finite-difference check of the backward on real weights (fp32)
+  measure_routing.py / analyze_trace.py   routing traces and their statistics
+  build_eval_corpus.py / build_eval_news.py / eval_perplexity.py   evaluation protocol
+  build_train_set.py    Dolly-15k-tr selection (400 examples), packing + prompt masking in the data path
+  train_lazy_lora.sh    training entry point (refuses to start on an incomplete checkpoint)
+  watchdog.py + systemd/   unattended-run watchdog: progress, health, auto-resume, push to phone
+  status.sh             one-screen status
+```
+
+Design rules that came out of the handoff review: a tensor missing on disk raises instead
+of being replaced by random weights; the forward is never trusted until it matches the C
+oracle; the backward is never trusted until finite differences say so; every measurement
+is a file that can be re-read later.
+
+## Quick verification
+
 ```bash
-bash scripts/run_profile.sh
+export PYTHONPATH=$PWD
+~/venvs/lazylora/bin/python -m unittest lazy_lora.tests.test_reference_ops    # 8 op fixtures
+~/venvs/lazylora/bin/python scripts/check_shards.py                             # checkpoint integrity
+~/venvs/lazylora/bin/python scripts/compare_with_c_dump.py --dump <chdump> --ids 19180,11 --layers 13
+~/venvs/lazylora/bin/python scripts/verify_backward.py --layer 1 --param-probes 16
+bash scripts/run_mock_tests.sh                                                   # engine on synthetic weights
 ```
 
-### 2. Run Comprehensive Pre-Training Test Suite
-Before starting the real training, execute the mock test suite to verify math, routing, gradients, disk ring buffers, and memory bounds:
-```bash
-bash scripts/run_mock_tests.sh
-```
+## Evaluation protocol
 
-### 3. Production Training (When Download Completes)
-Once all 96 shards of Kimi K3 finish downloading to `/mnt/d/hamza/kimi_k3_model_weights`, launch training:
-```bash
-bash scripts/train_lazy_lora.sh
-```
+Fixed before training (DEVAM.md §16): bits per byte on a 2048-token slice of Turkish news
+published after the model's release (baseline 0.455), with Turkish and English Wikipedia
+slices as memorisation / forgetting controls (0.311 / 0.194). Success means the news
+slice improves by ≥ 3 % while English Wikipedia degrades by ≤ 2 %; a negative result is
+reported as such.
+
+## Acknowledgements
+
+The forward pass was validated against [kimi-k3-in-c](https://github.com/FareedKhan-dev/kimi-k3-in-c)
+(FareedKhan-dev), whose op-level fixtures and per-layer dump hook made layer-by-layer
+comparison possible. Training data: `atasoglu/databricks-dolly-15k-tr` (CC BY-SA 3.0).
+Evaluation text: Wikipedia (CC BY-SA 4.0), Anadolu Agency and BBC Türkçe (evaluation only).

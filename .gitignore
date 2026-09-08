@@ -13,3 +13,6 @@ __pycache__/
 
 # native build artefact
 lazy_lora/native/*.so
+
+# stray editor/session databases
+*.db
