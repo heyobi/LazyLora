@@ -1,4 +1,33 @@
-# 🔄 DEVİR BELGESİ — LazyLoRA'nın Yeni Makinede Kaldığı Yerden Sürdürülmesi
+# 🔄 DEVİR BELGESİ — LazyLoRA
+
+## ŞU AN (8 Eylül 2026, güncel tutulur)
+
+**Durum:** Motor uçtan uca çalışıyor ve doğrulanmış: ileri geçiş 93 katmanda C referansıyla
+eşleşiyor (§13, §17.1), geri geçiş sonlu farkla doğrulandı (§11), ilk tam eğitim adımı
+tamamlandı (§17). Beş metinlik yönlendirme ölçümü bitti (Bulgular §16-17), taban
+değerlendirmesi ve eşik sabit (§16.1). Hedef: Türkçe konuşan Kimi; veri
+`LazyLora_Workspace/datasets/dolly_tr_400.jsonl`.
+
+**Koşan iş:** kanıt koşusu (`LazyLora_Workspace/run_proof.sh`, 8 Eylül 09:18): 5 örnek,
+16 adım, 1024 token paketli, istem maskeli, lr 1e-3, warmup 2, her 4 adımda checkpoint.
+Adım ~6-7 saat. Bekçi (`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da
+bir telefona ilerleme/uyarı gönderir ve ölürse checkpoint'ten devam ettirir.
+
+**Nasıl bakılır:** `bash scripts/status.sh` · `cat LazyLora_Workspace/status.txt` ·
+`tail LazyLora_Workspace/forward_loss.jsonl` (adım başına loss) ·
+`tr '\r' '\n' < LazyLora_Workspace/proof_run_2026-09-08.raw | grep LOSS`.
+
+**Bittiğinde ne yapılacak:** aynı iki dizinin loss'u turdan tura düşüyorsa (adımlar 1,3,5…
+ve 2,4,6… ayrı ayrı) mekanizma kanıtlıdır → asıl koşu:
+`bash scripts/train_lazy_lora.sh --data $W/datasets/dolly_tr_400.jsonl --steps 90 --seq-len 1024 --lr 2e-4 --warmup 5 --save-steps 5`
+(GPU: `LAZYLORA_GPU=1 LAZYLORA_PYTHON=~/venvs/lazylora-cu/bin/python`), `run_manifest.json`'u
+yeni koşuya göre güncelle, ardından `eval_perplexity.py --corpus tr_news,tr_wiki,en_wiki
+--checkpoint <ckpt>` ile eşiği (§16.1) sına. Düşmüyorsa: lr, maskeleme, gradyan normları.
+
+**Dokunma:** koşan python sürecini, `/mnt/nvme/lazylora/activations/run_<pid>` dizinini ve
+USB diski. Tuzaklar §6 ve hafıza notunda (pgrep deseni, RAM bütçesi, grep tamponu).
+
+---
 
 Bu belge, projeyi başka bir bilgisayarda devralacak kişinin (veya oturumun) sohbet geçmişi olmadan devam edebilmesi için yazılmıştır. Tarih: **29 Ağustos 2026**.
 
