@@ -68,8 +68,22 @@ def main():
     gpu_temp = int(sh("nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader") or 0)
     info.update(hdd_ok=hdd_ok, disk_errors=disk_err, nvme_free_gb=round(nvme_free, 1),
                 swap_used_gb=round(swap_used, 2), gpu_temp=gpu_temp)
+    hdd_temp = int(sh("sudo -n smartctl -d sat -A /dev/$(lsblk -no PKNAME $(findmnt -no SOURCE /mnt/disk2tb 2>/dev/null) 2>/dev/null) 2>/dev/null | awk '/Temperature_Celsius/{print $10}'") or 0)
+    usb_resets = int(sh("sudo -n dmesg 2>/dev/null | grep -c 'usb 2-2: reset'") or 0)
+    info.update(hdd_temp=hdd_temp, usb_resets=usb_resets)
+    if hdd_temp >= 58:
+        alerts.append(f"HDD {hdd_temp} °C")
+    if usb_resets > state.get("usb_resets_seen", usb_resets) + 20:
+        alerts.append(f"USB köprüsü sıfırlanıyor (+{usb_resets - state.get('usb_resets_seen', usb_resets)})")
+    state["usb_resets_seen"] = usb_resets
     if not hdd_ok:
         alerts.append("HDD okunamıyor (model dizini yok)")
+        # the enclosure dropped off the bus: try the reconnect procedure once per tick
+        out = sh("sudo -n bash " + os.path.join(REPO, "scripts", "hdd_reconnect.sh") + " 2>&1 | tail -3", timeout=300)
+        info["reconnect"] = out[-200:]
+        hdd_ok = os.path.exists(os.path.join(cfg.paths.base_model_dir, "config.json"))
+        if hdd_ok:
+            push("LazyLoRA disk geri geldi", "USB disk yeniden bağlandı; koşu checkpoint'ten devam edecek")
     if disk_err > state.get("disk_err_seen", disk_err):
         alerts.append(f"Yeni disk/USB hatası (+{disk_err - state.get('disk_err_seen', disk_err)})")
     state["disk_err_seen"] = disk_err
@@ -151,7 +165,7 @@ def main():
                 f"{'/' + str(man['steps']) if man else ''}\n")
         if last:
             f.write(f"last step {last['step']}: loss {last['loss']:.4f}  at {time.strftime('%H:%M', time.localtime(last['time']))}\n")
-        f.write(f"hdd_ok={hdd_ok} disk_errors={disk_err} nvme_free={nvme_free:.1f}GB swap={swap_used:.1f}GB gpu={gpu_temp}C\n")
+        f.write(f"hdd_ok={hdd_ok} hdd={hdd_temp}C usb_resets={usb_resets} disk_errors={disk_err} nvme_free={nvme_free:.1f}GB swap={swap_used:.1f}GB gpu={gpu_temp}C\n")
         for a in alerts:
             f.write(f"ALERT: {a}\n")
     json.dump(state, open(os.path.join(W, "watchdog_state.json"), "w"))
