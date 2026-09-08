@@ -386,3 +386,19 @@ Wikipedia dilimleri ezber düzeyinde; birincil metrik haber dilimi (bit/bayt). *
 (≤ 0.198). Tutmazsa olumsuz sonuç, nedenleriyle raporlanır. Eğitim verisi:
 `datasets/dolly_tr_400.jsonl` (Dolly-15k-tr, CC BY-SA 3.0), 1024 token paketli, istem maskeli.
 Kanıt koşusu: `run_proof.sh` (5 örnek, 16 adım, lr 1e-3, warmup 2).
+
+## 18. GÖZETİMSİZ KOŞU TAKİBİ (8 Eylül 2026)
+
+`scripts/watchdog.py`, systemd kullanıcı zamanlayıcısı `lazylora-watchdog.timer` ile her
+15 dakikada bir koşar (birimler `systemd/` altında; kurulum: `~/.config/systemd/user/`'a
+kopyala, `systemctl --user enable --now lazylora-watchdog.timer`). Aktif koşu
+`LazyLora_Workspace/run_manifest.json` ile tanımlanır (ad, argümanlar, adım sayısı,
+beklenen adım süresi, python, env). Her turda: süreç yaşıyor mu, ilerleme
+(`forward_loss.jsonl`), takılma (3× beklenen adım süresi), HDD/USB hatası, NVMe boş alan,
+swap, GPU sıcaklığı; `status.json`/`status.txt` yazar; telefona (claude-code-server web
+push) her tamamlanan adımda, her sorunda ve bitişte bildirim gönderir; süreç ölmüşse en
+yeni checkpoint'ten `--resume` ile yeniden başlatır (arka arkaya en fazla 3 kez, 30 dk
+arayla). Durum: `bash scripts/status.sh` ya da `cat LazyLora_Workspace/status.txt`.
+
+Kanıt koşusu 8 Eylül 09:18'de başladı (`run_proof.sh`; 5 örnek, 16 adım, 1024 token
+paketli, istem maskeli, lr 1e-3, warmup 2, her 4 adımda checkpoint).
