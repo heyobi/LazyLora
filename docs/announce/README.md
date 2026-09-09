@@ -342,7 +342,7 @@ ends on a link.
       public, history is public; this is the last moment it can be cleaned. The orchestrator
       does the rewrite; nothing else in this checklist may be committed after it without
       re-checking that `evidence/`, `LICENSE` and the pre-registration commit survived.
-- [ ] The annotated tag on `4e9eed1` created and pushed with the repository. It does not
+- [ ] The annotated tag on `85af2a8` created and pushed with the repository. It does not
       exist yet (`git tag -l` is empty) and it has to survive the history rewrite, so make
       it after the rewrite, not before. `hacker_news.md` (both the post and the
       pre-registration answer), `x_thread.md` and `reddit_localllama.md` all say the tag is
@@ -392,7 +392,7 @@ ends on a link.
 
 **Pre-registration, stated so a sceptic accepts it and no further**
 - [x] The sentence is in `README.md`: the threshold was committed 8 September 2026 at
-      07:54:49 (commit `4e9eed1`), 29 hours before the run started on 9 September at
+      07:54:49 (commit `85af2a8`), 29 hours before the run started on 9 September at
       12:53:33 (`run_manifest.json`, `started=1788947613`). Every draft here carries the
       short version of it.
 - [x] The weakness stated in the same breath, in every draft: git dates come from this
@@ -591,7 +591,7 @@ without finding the log line first.
 | Evidence bundle | 25 files, 6.2 MB, `SHA256SUMS` over all of it; comparison log, five routing traces, both loss logs, the run manifest. Paths replaced by placeholders, nothing regenerated | `evidence/README.md` |
 | Traced texts | tr_paragraph 264 tokens, tr_news 261, code_python 167, en_paragraph 159, zh_paragraph 111; all five written for this study, the news-style one about hazelnut production statistics and **not** from any publication | `evidence/README.md`, each `analysis.md` |
 | Forward vs C reference | all 93 layers, cosine 0.9857 or better (lowest row **0.985744 at layer 71**; worst stretch 68-72), 0.999840 at output, 34 tokens, LoRA B = 0, 2869 s, 426.59 GB read. **The whole 98-line log is in the repository** | `evidence/cmp93_en34_2026-09-06.log` |
-| Op fixtures | 7 of 8 at 1e-5 abs / 1e-4 rel; MoE block 2e-4 abs, cosine 1.000000 (`test_reference_ops.py` hardcodes `abs_tol=2e-4`; commit a848e60 widened it) | `test_reference_ops.py`, Bulgular §15.6 |
+| Op fixtures | 7 of 8 at 1e-5 abs / 1e-4 rel; MoE block 2e-4 abs, cosine 1.000000 (`test_reference_ops.py` hardcodes `abs_tol=2e-4`; commit 91964c6 widened it) | `test_reference_ops.py`, Bulgular §15.6 |
 | Backward | layers 1, 3, 12, 13; 4 tokens; worst **9.1e-3** at layer 1 in two directions whose analytic derivative is ~3e-4; 3.6e-3 on MLA; ≤ 2.0e-3 elsewhere | DEVAM §11, §268-276 |
 | Proof run | 5 examples → 2 packed sequences, 1082 tokens total, 528 trained answer tokens (limit 1024), lr 1e-3, warmup 2 | Bulgular §18 |
 | Proof losses | A: 0.909 → 0.500 → 0.157; B: 0.521 → 0.193 (0.909084, 0.521090, 0.500335, 0.193009, 0.156585 to six decimals) | `evidence/forward_loss_proof.jsonl`, last five lines |
@@ -605,7 +605,7 @@ without finding the log line first.
 | Main run | 400 Dolly-tr examples → 154 packed sequences ≤ 1024 tokens (78k trained tokens/epoch), 100 steps at batch 1 = 0.65 epoch, ≈ 260 examples seen once, lr 5e-4 cosine, warmup 5, prompt masked, checkpoint every 5 steps | DEVAM "ŞU AN" |
 | Baselines (bits/byte) | TR news 0.455, TR wiki 0.311, EN wiki 0.194 | DEVAM §16.1 |
 | Threshold | news ≤ 0.441 (−3 %) **and** EN wiki ≤ 0.198 (+2 % max) | DEVAM §16.1 |
-| Pre-registration | commit `4e9eed1`, 8 Sep 2026 07:54:49, 29 h before the run (9 Sep 12:53:33) | git log, run_manifest |
+| Pre-registration | commit `85af2a8`, 8 Sep 2026 07:54:49, 29 h before the run (9 Sep 12:53:33) | git log, run_manifest |
 | Routing: concentration | a batch touches 43-56 % of the experts a uniform router would; **not monotone with depth** — ~430 unique experts at layers 1-36, a trough of 243 at 49-60, ~295 at 73-92 | Bulgular §17, measurement_note §5; recomputable from `evidence/traces/` |
 | Routing: language | cross-language expert-set Jaccard 0.35-0.39, equal to within-language different-content; prose vs Python 0.20-0.21; language signature only in layers 1-8 of 92 | Bulgular §17; recomputable from `evidence/traces/` |
 | Routing: locality | consecutive-token Jaccard 0.258 vs 0.009 random; per-layer LRU 62-72 % at 64-128 experts (1.1-2.2 GB) in decoding | Bulgular §17.2; recomputable from `evidence/traces/` |

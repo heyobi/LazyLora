@@ -239,7 +239,7 @@ like fabrication and it is a missing field in a log writer.
 
 **"Your pre-registration is just a git commit you made yourself."**
 
-> Correct, and it is the weakest link in the project. The threshold is in commit `4e9eed1`
+> Correct, and it is the weakest link in the project. The threshold is in commit `85af2a8`
 > at 8 September 07:54:49, 29 hours before the run's `started=1788947613`, and there is an
 > annotated tag on that commit so GitHub has its own record of it. But git dates come from
 > this laptop's clock, the repository was private until launch, and the tag is mine too:

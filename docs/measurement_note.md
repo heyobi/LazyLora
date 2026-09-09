@@ -688,7 +688,7 @@ copies were made; with `--prefix` it only prints.
 - **No claim is made here about training outcomes.** This note measures routing. The
   engine's learning demonstration (`Bulgular.md` §18) is memorisation of five examples,
   and the pre-registered evaluation of whether the adapter improves Turkish
-  (`DEVAM.md` §16.1, threshold committed 8 September 2026 at 07:54:49, commit `4e9eed1`,
+  (`DEVAM.md` §16.1, threshold committed 8 September 2026 at 07:54:49, commit `85af2a8`,
   29 hours before the main run started) had not returned a result when this note was
   written.
 

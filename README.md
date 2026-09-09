@@ -90,7 +90,7 @@ of most of them.
 | Check | Result | Scope, stated precisely |
 |---|---|---|
 | **Forward vs an independent implementation** | every one of the 93 layers at cosine **≥ 0.9857**, and **0.999840** at the output | 34 tokens of one English paragraph, with an untrained adapter (LoRA B is zero-initialised, so both engines must agree exactly). **The full log is in the repository: [`evidence/cmp93_en34_2026-09-06.log`](evidence/cmp93_en34_2026-09-06.log)** — 98 lines, one row per layer, each with the cosine, the maximum absolute difference, both implementations' standard deviations and the number of experts that layer read; 2869 s and 426.59 GB of reads at the bottom. The dip runs from layer 68 to layer 72 (0.989709, 0.987459, 0.986975, **0.985744**, 0.987909), with the three lowest rows of the whole file at 69–71. Earlier drafts of this README said "minimum 0.988 at layer 72": that was the lowest of the nine layers spot-checked in [Bulgular.md](Bulgular.md) §17.1, not the lowest of the 93, and the log is what settles it. Not verified with a trained adapter, at 1024-token lengths, or on Turkish or code input. |
-| **Op-level fixtures** | 7 of 8 match at **1e-5 absolute / 1e-4 relative**; the MoE block matches at **2e-4 absolute** (cosine 1.000000) | `rmsnorm`, `situ_glu`, `shortconv`, `kda_decay`, `router`, `attnres`, `mla` at 1e-5; `moe` needed the wider tolerance, which is the MXFP4 decode path's own rounding. `lazy_lora/tests/test_reference_ops.py` hardcodes `abs_tol=2e-4` for that one fixture ([Bulgular.md](Bulgular.md) §15.6; commit `a848e60`, "Widen the MoE fixture tolerance, and record the reference validation in Bulgular.md"). The MoE block does **not** match at 1e-5. |
+| **Op-level fixtures** | 7 of 8 match at **1e-5 absolute / 1e-4 relative**; the MoE block matches at **2e-4 absolute** (cosine 1.000000) | `rmsnorm`, `situ_glu`, `shortconv`, `kda_decay`, `router`, `attnres`, `mla` at 1e-5; `moe` needed the wider tolerance, which is the MXFP4 decode path's own rounding. `lazy_lora/tests/test_reference_ops.py` hardcodes `abs_tol=2e-4` for that one fixture ([Bulgular.md](Bulgular.md) §15.6; commit `91964c6`, "Widen the MoE fixture tolerance, and record the reference validation in Bulgular.md"). The MoE block does **not** match at 1e-5. |
 | **Gradients vs central finite differences** | worst relative error **9.1e-3**, at layer 1, in two directions whose analytic derivative is about 3e-4 — at that magnitude the finite difference is the noisier estimate; **3.6e-3** on the MLA layer; the rest at or under **2.0e-3** | Four representative layers of 93 — 1 (KDA + MoE, one bank entry), 3 (MLA), 12 (block boundary), 13 (two bank entries) — on 4 tokens, in an fp32 engine with float64 loss reduction, adaptive epsilon and routing-flip detection. Layers 1 and 3 were checked over all 16 LoRA tensors of the layer plus the input and residual-bank directions (worst 9.1e-3 and 3.6e-3 respectively); layers 12 and 13 over the input and bank directions and the layer's LoRA tensors as recorded in [DEVAM.md](DEVAM.md) §11 (2.0e-3 and 9.1e-4). This is not a whole-model gradient check. The end-to-end evidence that the loop is correct is the proof run's falling loss. |
 | **Refusal to fabricate** | a tensor missing on disk raises `MissingTensorError` | Synthetic stand-in tensors exist only for the mock suite and only behind `LAZYLORA_ALLOW_SYNTHETIC=1` (`lazy_lora/core/config.py`). Nothing in a real run silently substitutes random weights. An earlier version of this engine generated the router gates at random instead of reading them from disk and produced plausible-looking losses for days ([Bulgular.md](Bulgular.md) §11.3); the gate exists so that cannot happen again. |
 
@@ -456,7 +456,7 @@ machine. If that is wrong, send the link and it goes in the table.
 
 ## Evaluation protocol, registered before training
 
-The threshold was committed on **8 September 2026 at 07:54:49** (commit `4e9eed1`,
+The threshold was committed on **8 September 2026 at 07:54:49** (commit `85af2a8`,
 "Pre-registered success threshold and baseline table (news slice bpb 0.455)"), about
 **29 hours before** the main
 run started on 9 September at 12:53:32. Both are in the repository's history. Baselines, measured
@@ -479,13 +479,12 @@ publishing that expectation now is what makes a negative result a result rather 
 excuse. Second, and stated plainly because it is the weak point of the method: **nothing
 outside this machine's own clock corroborates the pre-registration.** Git dates are set by
 the local clock and the repository was private while the threshold was written. An
-annotated tag on `4e9eed1` would give GitHub a second timestamp once pushed — a lower bound
-from the same account, not an independent one, and it would say nothing about when the
-commit was really written. **That tag is not yet created.** An
-externally timestamped copy of the threshold sentence (a public dated post, or an
-OpenTimestamps stamp of the commit hash) is what would fix it; until one exists, this
-paragraph is worth exactly a reader's willingness to trust a date typed by the machine that
-produced it.
+annotated tag `preregistration-2026-09-08` points at `85af2a8`, so GitHub records when the
+tag arrived as well as when the commit did — a second lower bound from the same account,
+not an independent witness. Note also that this repository's history was rewritten once,
+before publication, to drop two AI-session database files and the tracked bytecode that
+had been committed by accident; commit hashes quoted anywhere therefore date from after
+that rewrite, and the dates they carry are the original author dates.
 
 ---
 
