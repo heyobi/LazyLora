@@ -681,3 +681,29 @@ Beş metin × 92 katman izleri üzerinde, ölçüm koşusu gerektirmeden:
 Tezin son biçimi: uzman yerelliği tek-token çıkarımı için geçerli ve önbelleklenebilir bir
 özellik; eğitim batch'lerinde ise okunan küme birleşime yakınsadığı için önbellek/ön-getirme
 yerine sıralı süpürme + batch üzerinden amortisman doğru ilkel.
+
+## 18. Deney 10: Öğrenme kanıtı — 5 örnek, 5 adım (8-9 Eylül 2026)
+
+Soru: motorun ileri+geri+optimizer döngüsü gerçekten öğreniyor mu? Yöntem: 5 Dolly-tr
+örneği 2 paket diziye (A, B) sıkıştırıldı (1082 token, 528'i eğitilen cevap token'ı),
+diziler sırayla verildi, lr 1e-3, warmup 2, 1024 token, istem maskeli, GPU uzman yolu.
+Loss ileri geçiş sonunda, yalnız cevap token'larında.
+
+| adım | dizi | loss | ppl | bitiş |
+|---|---|---|---|---|
+| 1 | A | 0.909 | 2.48 | 8 Eyl 12:26 |
+| 2 | B | 0.521 | 1.68 | 18:13 |
+| 3 | A | 0.500 | 1.65 | 23:42 |
+| 4 | B | 0.193 | 1.21 | 9 Eyl 05:28 |
+| 5 | A | 0.157 | 1.17 | 11:03 |
+
+Aynı dizi için loss her turda düştü (A: 0.909 → 0.500 → 0.157; B: 0.521 → 0.193); B'nin
+ilk değeri A'dan düşük çünkü A üzerindeki ilk güncellemeden sonra ölçüldü. Adım süresi
+5.6-5.8 saat (ileri ~2.8 saat, 110 s/katman; geri ~2.9 saat). Süreç 27 saat boyunca
+RSS 4.5-4.7 GB'de kaldı; USB köprüsü bu sürede saatte ~45 kez sıfırlandı, hiçbir okuma
+kalıcı başarısız olmadı. 16 adımın kalanı bilgi katmayacağı için koşu 5. adımdan sonra
+durduruldu; checkpoint'ler `checkpoints/proof_dolly5/` (adım 1 ve 4).
+
+Sonuç: 2.78T parametreli modelin LoRA adaptörü bu makinede eğitiliyor; gradyanın yönü doğru
+(sonlu fark doğrulaması §11'in uçtan uca teyidi). Asıl koşu 9 Eylül 12:53'te başladı
+(DEVAM "ŞU AN").

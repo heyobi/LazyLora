@@ -13,15 +13,15 @@ live in RAM.
 *Türkçe okuyucu için: proje günlüğü [DEVAM.md](DEVAM.md), deney kayıtları
 [Bulgular.md](Bulgular.md), fikir havuzu [Fikirler.md](Fikirler.md).*
 
-## Status (8 September 2026)
+## Status (9 September 2026)
 
 | | |
 |---|---|
 | Forward pass | matches the independent C implementation [kimi-k3-in-c](https://github.com/FareedKhan-dev/kimi-k3-in-c) layer by layer over **all 93 layers** (cosine ≥ 0.988, 0.99984 at the output) |
 | Backward pass | LoRA gradients, input and residual-bank gradients verified by central finite differences on KDA, MLA and block-boundary layers (relative error ≤ 2e-3) |
-| End-to-end | perplexity 5.9 on an English paragraph, 2.2 on Turkish, 1.9 on Python; first full training step (forward + backward + AdamW + checkpoint) completed |
-| Speed | forward ~100-140 s per layer at 128-1024 tokens, disk-bound at ~115 MB/s; a 256-token training step 4.5 h |
-| Now running | proof-of-learning run (5 examples, 16 steps), then a ~4-week Turkish instruction run |
+| End-to-end | perplexity 5.9 on an English paragraph, 2.2 on Turkish, 1.9 on Python; **learning demonstrated**: on two fixed 1024-token sequences the loss fell pass after pass (0.909 → 0.500 → 0.157 and 0.521 → 0.193, Bulgular.md §18) |
+| Speed | forward ~110 s per layer at 1024 tokens, disk-bound at ~115 MB/s; a 1024-token training step (forward + backward + AdamW) 5.7 h |
+| Now running | Turkish instruction run started 9 September: 400 Dolly-tr examples, 100 steps of 1024 packed tokens, LoRA lr 5e-4 cosine; ends ~3 October, then the pre-registered evaluation |
 
 ## Findings so far
 

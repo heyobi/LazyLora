@@ -1,31 +1,40 @@
 # 🔄 DEVİR BELGESİ — LazyLoRA
 
-## ŞU AN (8 Eylül 2026, güncel tutulur)
+## ŞU AN (9 Eylül 2026, güncel tutulur)
 
 **Durum:** Motor uçtan uca çalışıyor ve doğrulanmış: ileri geçiş 93 katmanda C referansıyla
-eşleşiyor (§13, §17.1), geri geçiş sonlu farkla doğrulandı (§11), ilk tam eğitim adımı
-tamamlandı (§17). Beş metinlik yönlendirme ölçümü bitti (Bulgular §16-17), taban
-değerlendirmesi ve eşik sabit (§16.1). Hedef: Türkçe konuşan Kimi; veri
-`LazyLora_Workspace/datasets/dolly_tr_400.jsonl`.
+eşleşiyor (§13, §17.1), geri geçiş sonlu farkla doğrulandı (§11). **Öğrenme kanıtlandı**
+(Bulgular §18): 5 örneklik kanıt koşusunda aynı dizinin loss'u tur tur düştü
+(A: 0.909 → 0.500 → 0.157, B: 0.521 → 0.193; adım ~5.7 saat). Beş metinlik yönlendirme
+ölçümü bitti (Bulgular §16-17), taban değerlendirmesi ve eşik sabit (§16.1). Hedef: Türkçe
+konuşan Kimi.
 
-**Koşan iş:** kanıt koşusu (`LazyLora_Workspace/run_proof.sh`, 8 Eylül 09:18): 5 örnek,
-16 adım, 1024 token paketli, istem maskeli, lr 1e-3, warmup 2, her 4 adımda checkpoint.
-Adım ~6-7 saat. Bekçi (`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da
-bir telefona ilerleme/uyarı gönderir ve ölürse checkpoint'ten devam ettirir.
+**Koşan iş:** asıl koşu (`LazyLora_Workspace/run_main.sh`, 9 Eylül 12:53):
+`datasets/dolly_tr_400.jsonl` (400 Dolly-tr örneği → 154 paket dizi ≤1024 token, 78k
+eğitilen token), 100 adım (0.65 epoch), lr 5e-4 tepe (kanıt koşusu 1e-3'te kararlıydı),
+warmup 5, kosinüs, istem maskeli, her 5 adımda checkpoint
+(`/mnt/nvme/lazylora/checkpoints/lazy_lora_step_NNNNN.pt`, son 3 tutulur). Adım ~5.7 saat
+→ bitiş ~3 Ekim. Bekçi (`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da
+bir telefona ilerleme/uyarı gönderir, ölürse checkpoint'ten devam ettirir, USB disk düşerse
+yeniden bağlar. Manifest: `LazyLora_Workspace/run_manifest.json`. Kanıt koşusunun
+checkpoint'leri `checkpoints/proof_dolly5/`, loss'ları `forward_loss.jsonl.proof`.
 
 **Nasıl bakılır:** `bash scripts/status.sh` · `cat LazyLora_Workspace/status.txt` ·
-`tail LazyLora_Workspace/forward_loss.jsonl` (adım başına loss) ·
-`tr '\r' '\n' < LazyLora_Workspace/proof_run_2026-09-08.raw | grep LOSS`.
+`tail LazyLora_Workspace/forward_loss.jsonl` (adım başına loss; not: loss ileri geçiş
+sonunda yazılır, adımın geri geçişi ~2 saat daha sürer) ·
+`tr '\r' '\n' < LazyLora_Workspace/main_run_2026-09-09.raw | tail`.
 
-**Bittiğinde ne yapılacak:** aynı iki dizinin loss'u turdan tura düşüyorsa (adımlar 1,3,5…
-ve 2,4,6… ayrı ayrı) mekanizma kanıtlıdır → asıl koşu:
-`bash scripts/train_lazy_lora.sh --data $W/datasets/dolly_tr_400.jsonl --steps 90 --seq-len 1024 --lr 2e-4 --warmup 5 --save-steps 5`
-(GPU: `LAZYLORA_GPU=1 LAZYLORA_PYTHON=~/venvs/lazylora-cu/bin/python`), `run_manifest.json`'u
-yeni koşuya göre güncelle, ardından `eval_perplexity.py --corpus tr_news,tr_wiki,en_wiki
---checkpoint <ckpt>` ile eşiği (§16.1) sına. Düşmüyorsa: lr, maskeleme, gradyan normları.
+**Bittiğinde ne yapılacak:** `eval_perplexity.py --corpus tr_news,tr_wiki,en_wiki
+--checkpoint /mnt/nvme/lazylora/checkpoints/lazy_lora_step_00100.pt` ile eşiği (§16.1:
+haber bpb 0.455 → ≤0.441, EN wiki ≤0.198) sına; sonucu olumlu/olumsuz olduğu gibi
+Bulgular'a ve README'ye yaz. Ara kontrol: adım 50 checkpoint'inde yalnız `tr_news`
+(≈3 saat) koşulabilir. Loss eğrisi yükseliyorsa (batch 1 olduğu için adım adım gürültülü;
+10 adımlık ortalamaya bak) lr'ı düşürüp `--resume` ile devam et.
 
 **Dokunma:** koşan python sürecini, `/mnt/nvme/lazylora/activations/run_<pid>` dizinini ve
-USB diski. Tuzaklar §6 ve hafıza notunda (pgrep deseni, RAM bütçesi, grep tamponu).
+USB diski. USB köprüsü yük altında saatte ~45 kez sıfırlanıyor; okumalar yeniden denemeyle
+başarılı, hız etkilenmiyor. Tuzaklar §6 ve hafıza notunda (pgrep deseni, RAM bütçesi,
+grep tamponu).
 
 ---
 
