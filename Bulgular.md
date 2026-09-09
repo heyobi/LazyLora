@@ -704,6 +704,19 @@ RSS 4.5-4.7 GB'de kaldı; USB köprüsü bu sürede saatte ~45 kez sıfırlandı
 kalıcı başarısız olmadı. 16 adımın kalanı bilgi katmayacağı için koşu 5. adımdan sonra
 durduruldu; checkpoint'ler `checkpoints/proof_dolly5/` (adım 1 ve 4).
 
+![Kanıt koşusu loss eğrisi](docs/figures/proof_loss_tr.png)
+
+*Şekil: `docs/figures/proof_loss_{tr,en}.png` (kare kart) ve `proof_loss_wide.png` (iki panel,
+loss + RAM'e sığmayanlar). `scripts/plot_proof.py` ile `forward_loss.jsonl.proof`'tan üretilir.*
+
 Sonuç: 2.78T parametreli modelin LoRA adaptörü bu makinede eğitiliyor; gradyanın yönü doğru
 (sonlu fark doğrulaması §11'in uçtan uca teyidi). Asıl koşu 9 Eylül 12:53'te başladı
 (DEVAM "ŞU AN").
+
+**Bu deneyin kanıtladığı ve kanıtlamadığı.** Kanıtladığı: ileri geçiş → geri geçiş →
+AdamW → checkpoint döngüsü uçtan uca doğru çalışıyor ve kayıp azaltılabiliyor; 7.6 GB RAM'de
+2.78T parametreli bir modelin ağırlıkları güncellenebiliyor. Kanıtlamadığı: genelleme. Beş
+örnek üzerinde loss'un düşmesi ezberdir ve zaten istenen budur (LIMA tarzı veriyle değil,
+mekanizma testiyle uğraşıyoruz). Modelin Türkçesinin gerçekten iyileşip iyileşmediği,
+eğitimde görülmemiş, modelin yayınından sonra yazılmış haber metni üzerinde önceden
+kaydedilmiş eşikle (§16.1: bpb 0.455 → ≤0.441) asıl koşudan sonra sınanacak.

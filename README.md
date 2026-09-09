@@ -23,6 +23,14 @@ live in RAM.
 | Speed | forward ~110 s per layer at 1024 tokens, disk-bound at ~115 MB/s; a 1024-token training step (forward + backward + AdamW) 5.7 h |
 | Now running | Turkish instruction run started 9 September: 400 Dolly-tr examples, 100 steps of 1024 packed tokens, LoRA lr 5e-4 cosine; ends ~3 October, then the pre-registered evaluation |
 
+![Proof of learning and what does not fit in RAM](docs/figures/proof_loss_wide.png)
+
+The loss on two fixed 1024-token sequences, pass after pass, during the proof run of 8-9
+September (`Bulgular.md` §18). It shows that the forward-backward-AdamW-checkpoint loop is
+correct and that the adapter of a 2.78 T model can be moved by gradient descent on this
+machine; it is deliberate memorisation of five examples, not evidence of generalisation.
+That is what the pre-registered evaluation after the main run is for.
+
 ## Findings so far
 
 From routing traces of five texts (Turkish, English, Chinese, Turkish news, Python) over
