@@ -1,0 +1,387 @@
+<title>LazyLoRA Kanıt Koşusu</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --paper: #f5f4f1;
+    --panel: #fffefc;
+    --ink: #171c20;
+    --ink-soft: #4d565d;
+    --ink-faint: #7d868d;
+    --rule: #dcd8d1;
+    --rule-soft: #e8e5df;
+    --accent: #0e6879;
+    --accent-wash: #dceaed;
+    --clay: #a0552a;
+    --clay-wash: #f0e3d8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #101317;
+      --panel: #161a1f;
+      --ink: #e8ebed;
+      --ink-soft: #9aa4ab;
+      --ink-faint: #6f7981;
+      --rule: #272d34;
+      --rule-soft: #1f242a;
+      --accent: #57c1d4;
+      --accent-wash: #12313a;
+      --clay: #dd9a68;
+      --clay-wash: #33241a;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #101317;
+    --panel: #161a1f;
+    --ink: #e8ebed;
+    --ink-soft: #9aa4ab;
+    --ink-faint: #6f7981;
+    --rule: #272d34;
+    --rule-soft: #1f242a;
+    --accent: #57c1d4;
+    --accent-wash: #12313a;
+    --clay: #dd9a68;
+    --clay-wash: #33241a;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 56px 24px 88px;
+    display: flex;
+    flex-direction: column;
+    gap: 52px;
+  }
+  p { margin: 0; max-width: 66ch; }
+  h1, h2, h3 { margin: 0; text-wrap: balance; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--ink-faint);
+  }
+  header { display: flex; flex-direction: column; gap: 18px; }
+  h1 {
+    font-family: Newsreader, Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.08;
+    letter-spacing: -0.015em;
+  }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lede { font-size: 18.5px; color: var(--ink-soft); line-height: 1.62; }
+
+  h2 {
+    font-family: Newsreader, Georgia, serif;
+    font-weight: 600;
+    font-size: 25px;
+    letter-spacing: -0.01em;
+    margin-bottom: 14px;
+  }
+  section { display: flex; flex-direction: column; gap: 16px; }
+
+  /* ---- figures ---- */
+  .figure {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    padding: 26px 26px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .figure svg { width: 100%; height: auto; display: block; }
+  .caption { font-size: 13.5px; color: var(--ink-faint); line-height: 1.55; max-width: 62ch; }
+  .legend { display: flex; gap: 22px; flex-wrap: wrap; font-size: 13.5px; color: var(--ink-soft); }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .swatch { width: 16px; height: 3px; border-radius: 2px; }
+
+  /* ---- numbers ---- */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+  }
+  .stat { background: var(--panel); padding: 18px 20px; display: flex; flex-direction: column; gap: 3px; }
+  .stat b {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 500;
+    font-size: 24px;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat span { font-size: 13px; color: var(--ink-faint); }
+
+  /* ---- scale bars ---- */
+  .bars { display: flex; flex-direction: column; gap: 11px; }
+  .bar { display: grid; grid-template-columns: 190px 1fr; gap: 16px; align-items: center; }
+  .bar > span { font-size: 14px; color: var(--ink-soft); }
+  .track { display: flex; align-items: center; gap: 10px; }
+  .track i { display: block; height: 16px; background: var(--rule); }
+  .bar.ram i { background: var(--clay); }
+  .bar.lora i { background: var(--accent); }
+  .track b {
+    font-family: "IBM Plex Mono", monospace;
+    font-weight: 500;
+    font-size: 13.5px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
+  /* ---- step table ---- */
+  .scroll { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14.5px; min-width: 460px; }
+  th, td { text-align: left; padding: 9px 14px 9px 0; border-bottom: 1px solid var(--rule-soft); }
+  th { font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-faint); font-weight: 500; }
+  td.num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  td.seq-a { color: var(--accent); }
+  td.seq-b { color: var(--clay); }
+
+  /* ---- the layer strip: one training step ---- */
+  .strip { display: flex; flex-direction: column; gap: 9px; }
+  .ticks { display: flex; gap: 1px; height: 34px; align-items: flex-end; }
+  .ticks i { flex: 1 1 0; background: var(--accent); opacity: 0.55; }
+  .ticks.back i { background: var(--clay); opacity: 0.5; }
+  .strip-row { display: grid; grid-template-columns: 118px 1fr; gap: 14px; align-items: center; }
+  .strip-row > span { font-size: 13.5px; color: var(--ink-soft); }
+
+  /* ---- two-column verdict ---- */
+  .verdict { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 22px; }
+  .verdict div { display: flex; flex-direction: column; gap: 8px; }
+  .verdict h3 { font-size: 14px; letter-spacing: 0.02em; }
+  .verdict .yes h3 { color: var(--accent); }
+  .verdict .no h3 { color: var(--clay); }
+  .verdict p { font-size: 15px; color: var(--ink-soft); }
+
+  .pledge {
+    border-left: 3px solid var(--accent);
+    background: var(--accent-wash);
+    padding: 16px 20px;
+    font-size: 15px;
+    color: var(--ink);
+  }
+  .pledge code { font-family: "IBM Plex Mono", monospace; font-size: 13.5px; }
+
+  footer {
+    border-top: 1px solid var(--rule);
+    padding-top: 20px;
+    font-size: 13.5px;
+    color: var(--ink-faint);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  @media (max-width: 560px) {
+    .bar { grid-template-columns: 1fr; gap: 6px; }
+    .strip-row { grid-template-columns: 1fr; gap: 6px; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <div class="eyebrow">Kanıt koşusu · 8–9 Eylül 2026</div>
+    <h1>2,78 trilyon parametreli bir model, 7,6 GB RAM'li bir dizüstünde <em>öğrendi</em></h1>
+    <p class="lede">
+      Kimi K3 belleğe sığmıyor: 1,56 TB'lık checkpoint bir USB harici diskte duruyor, 93 katmanın
+      her biri sırayla diskten akıyor, RAM'de aynı anda tek katman kalıyor. Eğitilen tek şey
+      590 MB'lık LoRA adaptörü. Dün gece bu döngünün gerçekten öğrendiğini gördük: aynı diziyi
+      tekrar tekrar verdiğimizde loss her turda düştü.
+    </p>
+  </header>
+
+  <section>
+    <div class="figure">
+      <svg viewBox="0 0 640 330" role="img" aria-label="Aynı dizi üzerinde tur başına loss: A dizisi 0,909'dan 0,500'e ve 0,157'ye; B dizisi 0,521'den 0,193'e düşüyor.">
+        <g stroke="var(--rule)" stroke-width="1">
+          <line x1="82" y1="50" x2="612" y2="50" />
+          <line x1="82" y1="112.5" x2="612" y2="112.5" />
+          <line x1="82" y1="175" x2="612" y2="175" />
+          <line x1="82" y1="237.5" x2="612" y2="237.5" />
+          <line x1="82" y1="300" x2="612" y2="300" />
+        </g>
+        <g fill="var(--ink-faint)" font-family="IBM Plex Mono, monospace" font-size="12" text-anchor="end">
+          <text x="70" y="54">1,00</text>
+          <text x="70" y="116.5">0,75</text>
+          <text x="70" y="179">0,50</text>
+          <text x="70" y="241.5">0,25</text>
+          <text x="70" y="304">0,00</text>
+        </g>
+        <g fill="var(--ink-soft)" font-family="IBM Plex Sans, sans-serif" font-size="13" text-anchor="middle">
+          <text x="130" y="324">1. tur</text>
+          <text x="330" y="324">2. tur</text>
+          <text x="530" y="324">3. tur</text>
+        </g>
+
+        <polyline points="130,72.8 330,175 530,260.8" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+        <polyline points="130,169.8 330,251.8" fill="none" stroke="var(--clay)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+
+        <g fill="var(--accent)">
+          <circle cx="130" cy="72.8" r="5.5" /><circle cx="330" cy="175" r="5.5" /><circle cx="530" cy="260.8" r="5.5" />
+        </g>
+        <g fill="var(--clay)">
+          <circle cx="130" cy="169.8" r="5.5" /><circle cx="330" cy="251.8" r="5.5" />
+        </g>
+
+        <g font-family="IBM Plex Mono, monospace" font-size="14" font-weight="500" text-anchor="middle">
+          <text x="130" y="56" fill="var(--accent)">0,909</text>
+          <text x="330" y="158" fill="var(--accent)">0,500</text>
+          <text x="530" y="244" fill="var(--accent)">0,157</text>
+          <text x="130" y="192" fill="var(--clay)">0,521</text>
+          <text x="330" y="274" fill="var(--clay)">0,193</text>
+        </g>
+      </svg>
+      <div class="legend">
+        <span><i class="swatch" style="background: var(--accent);"></i> A dizisi</span>
+        <span><i class="swatch" style="background: var(--clay);"></i> B dizisi</span>
+      </div>
+      <p class="caption">
+        Loss yalnız cevap token'larında ölçülüyor; istem token'ları maskeli. İki dizi sırayla
+        veriliyor, bu yüzden B'nin ilk ölçümü A üzerindeki ilk güncellemeden sonra alınmış.
+      </p>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b>5,7 sa</b><span>bir eğitim adımı</span></div>
+      <div class="stat"><b>4,7 GB</b><span>en yüksek bellek</span></div>
+      <div class="stat"><b>590 MB</b><span>eğitilen ağırlık</span></div>
+      <div class="stat"><b>115 MB/s</b><span>disk bant genişliği</span></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Ne sığmıyor</h2>
+    <p>
+      Sorunun tamamı şu oranda: modelin ağırlıkları makinenin belleğinden iki yüz kat büyük.
+      Çözüm onu sıkıştırmak değil, hiç durdurmadan akıtmak.
+    </p>
+    <div class="figure">
+      <div class="bars">
+        <div class="bar"><span>checkpoint (USB disk)</span><div class="track"><i style="width: 94.7%;"></i><b>1560 GB</b></div></div>
+        <div class="bar"><span>ortak ağırlıklar (NVMe)</span><div class="track"><i style="width: 65.0%;"></i><b>108,8 GB</b></div></div>
+        <div class="bar ram"><span>makinenin RAM'i</span><div class="track"><i style="width: 35.4%;"></i><b>7,6 GB</b></div></div>
+        <div class="bar lora"><span>LoRA adaptörü (eğitilen)</span><div class="track"><i style="width: 6.9%;"></i><b>0,59 GB</b></div></div>
+      </div>
+      <p class="caption">Ölçek logaritmik. Uzman ağırlıkları MXFP4 olarak diskte duruyor; her uzman 17,5 MB.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Bir adım nasıl geçiyor</h2>
+    <p>
+      Bir eğitim adımı 93 katmanın ileri süpürmesi, sonra aynı 93 katmanın geri süpürmesidir.
+      Her çubuk bir katman: ağırlıkları diskten okunur, hesap yapılır, bellekten atılır.
+      Katman sınırındaki ara sonuçlar NVMe'deki halka tampona yazılır.
+    </p>
+    <div class="figure strip">
+      <div class="strip-row">
+        <span>ileri · 2,8 sa</span>
+        <div class="ticks" id="fwd" aria-hidden="true"></div>
+      </div>
+      <div class="strip-row">
+        <span>geri · 2,9 sa</span>
+        <div class="ticks back" id="bwd" aria-hidden="true"></div>
+      </div>
+      <p class="caption">
+        93 + 93 katman, katman başına ortalama 110 saniye. Süreyi belirleyen hesap değil, diskin
+        okuma hızı: motor 115 MB/s'lik bandı doyuruyor.
+      </p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Adım adım</h2>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr><th>Adım</th><th>Dizi</th><th>Loss</th><th>Perplexity</th><th>Bitiş</th></tr>
+        </thead>
+        <tbody>
+          <tr><td class="num">1</td><td class="seq-a">A</td><td class="num">0,909</td><td class="num">2,48</td><td class="num">8 Eyl 12:26</td></tr>
+          <tr><td class="num">2</td><td class="seq-b">B</td><td class="num">0,521</td><td class="num">1,68</td><td class="num">8 Eyl 18:13</td></tr>
+          <tr><td class="num">3</td><td class="seq-a">A</td><td class="num">0,500</td><td class="num">1,65</td><td class="num">8 Eyl 23:42</td></tr>
+          <tr><td class="num">4</td><td class="seq-b">B</td><td class="num">0,193</td><td class="num">1,21</td><td class="num">9 Eyl 05:28</td></tr>
+          <tr><td class="num">5</td><td class="seq-a">A</td><td class="num">0,157</td><td class="num">1,17</td><td class="num">9 Eyl 11:03</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="caption">
+      Beş Türkçe talimat örneği, 1024 token'lık iki pakete sıkıştırıldı (528'i eğitilen cevap
+      token'ı), lr 1e-3, warmup 2. Süreç 27 saat boyunca 4,5–4,7 GB bellekte kaldı.
+    </p>
+  </section>
+
+  <section>
+    <h2>Bu ne kanıtlar, ne kanıtlamaz</h2>
+    <div class="verdict">
+      <div class="yes">
+        <h3>Kanıtladığı</h3>
+        <p>
+          İleri geçiş → geri geçiş → AdamW → checkpoint döngüsü uçtan uca doğru çalışıyor.
+          Gradyanın yönü doğru; sonlu farkla katman katman doğrulanan geri geçişin uçtan uca
+          teyidi bu. 2,78 trilyon parametreli bir modelin adaptörü bu makinede hareket ediyor.
+        </p>
+      </div>
+      <div class="no">
+        <h3>Kanıtlamadığı</h3>
+        <p>
+          Genelleme. Beş örnek üzerinde loss'un düşmesi ezberdir ve bu testte istenen de tam
+          olarak budur. Modelin Türkçesinin iyileşip iyileşmediği bu grafikten okunamaz.
+        </p>
+      </div>
+    </div>
+    <div class="pledge">
+      Bu yüzden ölçüt eğitimden <em>önce</em> yazıldı: modelin yayınından sonra çıkmış Türkçe
+      haber metninde bit/bayt <code>0,455 → ≤0,441</code> inecek, İngilizce Wikipedia dilimi
+      <code>0,194 → ≤0,198</code>'i geçmeyecek. Sonuç olumsuz çıkarsa da olduğu gibi yazılacak.
+    </div>
+  </section>
+
+  <section>
+    <h2>Şimdi ne dönüyor</h2>
+    <p>
+      9 Eylül 12:53'te asıl koşu başladı: 400 Türkçe talimat örneği, 1024 token'lık 154 paket
+      dizi, 100 adım, lr 5e-4 kosinüs. Adım başına 5,7 saatten ekim başında bitiyor. Bir
+      systemd zamanlayıcısı 15 dakikada bir ilerlemeyi telefona gönderiyor; süreç ölürse son
+      checkpoint'ten devam ettiriyor, USB disk düşerse yeniden bağlıyor.
+    </p>
+    <p>
+      Yol boyunca çıkan yönlendirme ölçümleri ayrı bir hikâye: uzman seçimi dilden çok alana
+      duyarlı, uzman yerelliği tek token'da gerçek ama eğitim batch'inde çöküyor, Türkçenin
+      maliyeti yönlendiricide değil tokenizer'da.
+    </p>
+  </section>
+
+  <footer>
+    <div>Kod, ölçümler ve ham iz dosyaları: <a href="https://github.com/heyobi/LazyLora">github.com/heyobi/LazyLora</a></div>
+    <div>İleri geçiş, bağımsız bir C implementasyonuna karşı 93 katmanda doğrulandı (kosinüs ≥ 0,988).</div>
+  </footer>
+
+</div>
+
+<script>
+  // 93 layers, one tick each; height encodes nothing but the sweep, so keep it even.
+  for (const [id, ] of [["fwd"], ["bwd"]]) {
+    const el = document.getElementById(id);
+    for (let i = 0; i < 93; i++) {
+      const t = document.createElement("i");
+      t.style.height = (id === "fwd" ? 40 + (i % 3) * 8 : 34 + (i % 3) * 8) + "%";
+      el.appendChild(t);
+    }
+  }
+</script>
