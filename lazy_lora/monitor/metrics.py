@@ -49,8 +49,13 @@ class MetricsTracker:
         self.peak_vram_mb = 0.0
 
     def get_c_drive_free_gb(self) -> float:
-        """Probe free space on C: drive."""
-        c_path = "/mnt/c" if platform.system() == "Linux" else "C:\\"
+        """Free space on the system disk (the one the run must not fill)."""
+        if platform.system() == "Windows":
+            c_path = "C:\\"
+        elif os.path.isdir("/mnt/c"):
+            c_path = "/mnt/c"          # a WSL host, which is where this project started
+        else:
+            c_path = "/"
         try:
             usage = shutil.disk_usage(c_path)
             return round(usage.free / (1024 ** 3), 2)
@@ -60,9 +65,12 @@ class MetricsTracker:
     def get_hardware_memory_snapshot(self) -> Dict[str, float]:
         """Query instant RAM and VRAM usage."""
         vram_used = 0.0
-        vram_total = 6144.0
+        vram_total = 0.0          # unknown until nvidia-smi answers; the bar then renders empty
         ram_used = 0.0
-        ram_total = 16.0
+        try:                      # the machine's real total, not a number from an older machine
+            ram_total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
+        except (ValueError, AttributeError, OSError):
+            ram_total = 0.0
 
         # Try nvidia-smi
         try:

@@ -1,0 +1,113 @@
+LazyLoRA
+Copyright 2026 Ibrahim Polat
+
+This product includes software developed by Ibrahim Polat.
+Licensed under the Apache License, Version 2.0 (the "License"); you may not use
+these files except in compliance with the License. You may obtain a copy of the
+License at http://www.apache.org/licenses/LICENSE-2.0
+
+This repository contains source code, measurement scripts and measurement results
+only. It contains no model weights and no third-party corpora. A component-by-
+component map of licences and attribution requirements is in docs/LICENSES.md.
+
+The measurement results are in evidence/: five expert-routing traces over 92 MoE
+layers, the 93-layer comparison against the reference C engine, the raw per-step
+training losses and the run manifest, with SHA256SUMS over all of them. They are
+this project's own measurements. The five texts that were traced were written for
+this study and are carried in the trace manifests; none of them is taken from a
+publication or a third-party corpus. The routing arrays (trace.bin) are released
+under CC0-1.0 as functional measurements of a computation; the rest of evidence/,
+like the rest of the documentation, is CC BY 4.0. See evidence/README.md and
+docs/traces/README.md.
+
+--------------------------------------------------------------------------------
+Third-party components and upstream works
+--------------------------------------------------------------------------------
+
+1. kimi-k3-in-c
+   Copyright the kimi-k3-in-c authors (FareedKhan-dev and contributors)
+   https://github.com/FareedKhan-dev/kimi-k3-in-c
+   Licensed under the Apache License, Version 2.0.
+
+   LazyLoRA's forward pass is verified layer by layer against this independent C
+   implementation. Its op-level test fixtures and per-layer hidden-state dumps
+   are read from a local checkout at run time; they are not redistributed here.
+
+   Vendored code: if docs/attic/patch_k3.py is present in the tree you have, it
+   contains the function mem_available_bytes(), copied from src/cli/k3_run.c of
+   that project and MODIFIED by Ibrahim Polat to add SwapFree to the reported
+   available memory. No other file in this repository contains code from
+   kimi-k3-in-c.
+
+2. Kimi K3 model weights
+   Copyright (c) 2026 Moonshot AI
+   https://huggingface.co/moonshotai/Kimi-K3
+   Licensed under the Kimi K3 License.
+
+   NO Kimi K3 model weights, configuration files or derived weight artefacts are
+   contained in this repository. This software reads weights that the user must
+   obtain separately from Moonshot AI under the Kimi K3 License. The packed
+   trunk file, the index overlay and any checkpoint produced by this engine are
+   treated as repackagings of those weights and are likewise not redistributed,
+   conservatively, whether or not that is legally required. LoRA adapters
+   trained with this software are treated as derivative works of those weights
+   and will be published separately under the Kimi K3 License; whether an
+   adapter is legally a derivative work of the base weights is unsettled
+   (docs/LICENSES.md), and no adapter has been published yet.
+
+   This project is not affiliated with, sponsored by, or endorsed by Moonshot AI.
+   "Kimi" and "Kimi K3" are used descriptively to identify the model this
+   software operates on. No trademark rights are claimed or granted.
+
+3. Training data: databricks-dolly-15k
+   Copyright (2023) Databricks, Inc.
+   https://huggingface.co/datasets/databricks/databricks-dolly-15k
+   Licensed under Creative Commons Attribution-ShareAlike 3.0 Unported
+   (CC BY-SA 3.0), https://creativecommons.org/licenses/by-sa/3.0/
+
+4. Training data: databricks-dolly-15k-tr
+   A Turkish machine translation of the above, by atasoglu.
+   https://huggingface.co/datasets/atasoglu/databricks-dolly-15k-tr
+   Licensed under CC BY-SA 3.0.
+
+   NO training data is contained in this repository; scripts/build_train_set.py
+   downloads it. The 400-example subset used for the main run WILL BE published
+   separately under CC BY-SA 3.0, with both attributions and a modification note,
+   when the run completes. It is not published yet.
+
+5. Evaluation text
+   Wikipedia article extracts (CC BY-SA 4.0, Wikipedia contributors) and news
+   articles from Anadolu Agency and BBC Turkce (all rights reserved, read for
+   measurement only). NO evaluation text is contained in this repository;
+   scripts/build_eval_corpus.py and scripts/build_eval_news.py fetch it at run
+   time. Manifests recording URLs, dates, revision ids, token counts and content
+   hashes will be committed alongside the evaluation results; no manifest is
+   committed in this repository yet.
+
+   This is the evaluation corpus only. The five texts traced in evidence/ are the
+   project's own, written for this study; no news article is contained in, or
+   recoverable from, anything in this repository.
+
+6. Python dependencies
+   NumPy and PyTorch. They are NOT vendored here. requirements.txt names the two
+   the engine needs (numpy>=1.24, torch>=2.3) and points at the PyTorch CPU index;
+   pyproject.toml carries the same two plus the [data] and [plot] extras used by the
+   dataset and plotting scripts. "pip install -r requirements.txt" and
+   "pip install -e ." install the same thing. Each package carries its own licence;
+   naming a dependency imposes no obligation on this repository.
+
+--------------------------------------------------------------------------------
+
+Nothing else in this repository is derived from a third-party work. Items 1-6
+above are the complete list. docs/LICENSES.md maps every component to its
+licence, its source and the attribution a redistributor owes, and gives the
+reasoning for the two parts that are not obvious: why routing arrays are
+released as CC0-1.0 facts about a computation, and why a LoRA adapter is
+treated as carrying the Kimi K3 License rather than the training data's
+ShareAlike.
+
+Attribution line for the measurements, if you redistribute them:
+
+   Expert-routing traces and measurement logs from LazyLoRA (Ibrahim Polat,
+   2026), https://github.com/heyobi/LazyLora - routing arrays CC0-1.0,
+   everything else in evidence/ CC BY 4.0.

@@ -1,7 +1,7 @@
 """
 LazyLoRA Out-of-Core MoE Training Engine for Kimi K3.
 Executes sequential layer-wise forward and backward passes, streaming base weights
-and storing boundary activations on D: drive to achieve training under 6GB VRAM and 16GB RAM.
+and storing boundary activations on the NVMe scratch disk to achieve training in 7.6 GB of RAM.
 """
 
 import os
@@ -174,7 +174,7 @@ class LazyLoRATrainer:
         self.config = config or get_default_config()
         self.device = self.config.streaming.device if (HAS_TORCH and torch.cuda.is_available()) else "cpu"
         
-        # Ensure directories exist on D: drive
+        # Ensure the scratch directories exist
         self.config.paths.ensure_directories()
 
         # Initialize streaming subsystems
@@ -1063,7 +1063,7 @@ class LazyLoRATrainer:
                 grad_h = self._lm_head_backward(grad_logits)
                 grad_h = self._finalize_backward(h_last, grad_h)
 
-                # Sequential reverse backward pass through all 93 layers reading activations from D: SSD
+                # Sequential reverse backward pass through all 93 layers reading activations from the NVMe scratch disk
                 for l in range(num_layers - 1, -1, -1):
                     if l % 5 == 0 or l == 0:
                         print(f"\r  ⚡ [BACKWARD PASS] Layer {l+1:02d}/{num_layers} (Grad Stream)", end="", flush=True)

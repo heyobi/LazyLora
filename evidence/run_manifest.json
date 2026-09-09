@@ -1,0 +1,26 @@
+{
+ "name": "main_dolly400",
+ "active": true,
+ "steps": 100,
+ "expected_step_seconds": 25500,
+ "python": "<venv>/bin/python",
+ "env": {
+  "LAZYLORA_GPU": "1"
+ },
+ "args": [
+  "--data",
+  "<workspace>/datasets/dolly_tr_400.jsonl",
+  "--steps",
+  "100",
+  "--seq-len",
+  "1024",
+  "--lr",
+  "5e-4",
+  "--warmup",
+  "5",
+  "--save-steps",
+  "5"
+ ],
+ "started": 1788947613.6641436,
+ "note": "step 1 measured: forward 3 h 11 m + backward 3 h 48 m = 6 h 59 m (1024-token packed sequences)"
+}

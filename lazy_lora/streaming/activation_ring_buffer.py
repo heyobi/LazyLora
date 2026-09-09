@@ -1,6 +1,6 @@
 """
 Disk-Backed Memory-Mapped Activation Ring Buffer for 93-Layer MoE Out-of-Core Backpropagation.
-Stores layer-boundary activation states on D: SSD, allowing infinite depth backprop
+Stores layer-boundary activation states on the NVMe scratch disk, allowing infinite depth backprop
 with zero RAM/VRAM accumulation.
 """
 
@@ -22,7 +22,7 @@ from lazy_lora.core.config import default_activation_dir
 
 class ActivationRingBuffer:
     """
-    Manages fast binary serialization and recovery of layer-boundary activations on D: drive.
+    Manages fast binary serialization and recovery of layer-boundary activations on the NVMe scratch disk.
     Pre-allocates buffers and rotates cleanly without memory or disk leaks.
     """
 

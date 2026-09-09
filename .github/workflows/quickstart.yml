@@ -1,0 +1,44 @@
+# This workflow has never been run either.
+#
+# It was written at the same time as scripts/quickstart.sh, on a machine that was busy
+# with a 29-day training run and could not execute either of them. Its first run on a
+# public GitHub runner IS the validation: it is the first time the quickstart executes
+# anywhere, and the first evidence that any of the numbers in docs/QUICKSTART.md Part 1
+# are the right order of magnitude. If this job is red, believe the job.
+
+name: quickstart
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  quickstart:
+    name: quickstart --fast (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The CPU wheel index: the GPU build is ~2.5 GB and nothing here needs CUDA.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.3'
+          python -m pip install -e .
+          python -c "import lazy_lora, numpy, torch; print(numpy.__version__, torch.__version__)"
+
+      # --fast skips the synthetic-weight suite, which writes ~330 MB. Everything that is
+      # actually about this engine - the tiny checkpoint, shard integrity, the forward
+      # pass, ten real training steps, the finite differences - still runs. quickstart.sh
+      # exits non-zero if any step fails, so no extra assertion is needed here.
+      #
+      # Step 1 will report SKIP: the op fixtures live in the reference C repository and
+      # are not vendored here.
+      - name: Run the quickstart
+        run: bash scripts/quickstart.sh --fast

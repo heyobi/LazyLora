@@ -1,18 +1,23 @@
-
-# scratch files from measurement sessions
-*_tmp.py
-*_tmp.sh
-
-# scratch files from measurement sessions
-*_tmp.py
-*_tmp.sh
-
 # bytecode
 __pycache__/
 *.pyc
 
+# packaging and environments
+build/
+dist/
+*.egg-info/
+.venv/
+venv/
+
 # native build artefact
 lazy_lora/native/*.so
+
+# quickstart sandbox, when kept with --dir
+.demo/
+
+# scratch files from measurement sessions
+*_tmp.py
+*_tmp.sh
 
 # stray editor/session databases
 *.db

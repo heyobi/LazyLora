@@ -1,27 +1,100 @@
 # 🔄 DEVİR BELGESİ — LazyLoRA
 
-## ŞU AN (9 Eylül 2026, güncel tutulur)
+## ŞU AN (10 Eylül 2026, güncel tutulur)
 
 **Durum:** Motor uçtan uca çalışıyor ve doğrulanmış: ileri geçiş 93 katmanda C referansıyla
-eşleşiyor (§13, §17.1), geri geçiş sonlu farkla doğrulandı (§11). **Öğrenme kanıtlandı**
-(Bulgular §18): 5 örneklik kanıt koşusunda aynı dizinin loss'u tur tur düştü
-(A: 0.909 → 0.500 → 0.157, B: 0.521 → 0.193; adım ~5.7 saat). Beş metinlik yönlendirme
-ölçümü bitti (Bulgular §16-17), taban değerlendirmesi ve eşik sabit (§16.1). Hedef: Türkçe
-konuşan Kimi.
+eşleşiyor (§13, Bulgular §17.1 — 93 satırın hepsi kosinüs 0.9857 ve üzeri; en düşük satır
+0.985744 katman 71, en kötü kuşak 68-72, çıkış katmanı 0.999840), geri geçiş dört katmanda
+sonlu farkla doğrulandı (§11; en kötü bağıl hata 9.1e-3, katman 1). **Eğitim döngüsü
+kanıtlandı** (Bulgular §18): 5 örneklik kanıt koşusunda aynı dizinin loss'u tur tur düştü
+(A: 0.909 → 0.500 → 0.157, B: 0.521 → 0.193). Bu ezberdir; ileri → geri → AdamW →
+checkpoint döngüsünün doğruluğunu kanıtlar, genellemeyi değil. Kanıt koşusunun adımı
+5.5-5.8 saatti ama iki paket dizisi ~541'er token'lıktı; asıl koşunun tam 1024'lük dizisiyle
+karıştırılmamalı. Beş metinlik yönlendirme ölçümü bitti (Bulgular §16-17) ve **izler artık
+depoda** (aşağıda). Taban değerlendirmesi ve eşik sabit (§16.1). Hedef: Türkçe konuşan Kimi.
+
+**Kanıt paketi depoda: `evidence/`** (6.2 MB, 25 dosya + `SHA256SUMS`; Bulgular §19). 9
+Eylül'de kondu. İçindekiler:
+- `evidence/traces/` — beş yönlendirme izi (`zh_paragraph`, `en_paragraph`, `tr_paragraph`,
+  `tr_news`, `code_python`), 92 MoE katmanının tamamı, her biri `trace.bin` + `trace.json` +
+  `analysis.json` + `analysis.md`; toplam 5.669.776 bayt yönlendirme kaydı.
+- `evidence/cmp93_en34_2026-09-06.log` — 93 katmanlık C karşılaştırması (98 satır, toplam
+  2869 s, 426.59 GB okuma).
+- `evidence/forward_loss_main.jsonl`, `forward_loss_proof.jsonl` — adım başına ham loss ve
+  Unix zaman damgası; belgelerdeki bütün adım süreleri bunlardan türer.
+- `evidence/run_manifest.json` — koşan işin manifesti, yollar yer tutucu.
+
+Önemi: ölçüm notundaki **her yönlendirme tablosu** artık okuyanın kendi dizüstünde
+yeniden hesaplanabilir — `scripts/analyze_trace.py <iz_dizini>`, checkpoint yok, GPU yok,
+saniyeler. Beş metnin beşi de bu çalışma için yazıldı (haber üslubundaki Türkçe paragraf
+fındık üretimi üzerinedir, hiçbir yayından alınmadı), o yüzden manifestlerde metin ve token
+id'leri açık duruyor. **Depoda olmayan, açıkça öyle yazılan:** 1.56 TB checkpoint, C
+motorunun katman katman dökümü, paketlenmiş NVMe gövdesi, 1.8 GB'lık eğitim
+checkpoint'leri, sonlu fark logu (harness terminale yazıyor; §11'deki rakamlar oradan) ve
+`profile_{128,512,1024}` yardımcı izleri.
 
 **Koşan iş:** asıl koşu (`LazyLora_Workspace/run_main.sh`, 9 Eylül 12:53):
 `datasets/dolly_tr_400.jsonl` (400 Dolly-tr örneği → 154 paket dizi ≤1024 token, 78k
 eğitilen token), 100 adım (0.65 epoch), lr 5e-4 tepe (kanıt koşusu 1e-3'te kararlıydı),
 warmup 5, kosinüs, istem maskeli, her 5 adımda checkpoint
-(`/mnt/nvme/lazylora/checkpoints/lazy_lora_step_NNNNN.pt`, son 3 tutulur). Adım ~5.7 saat
-→ bitiş ~3 Ekim. Bekçi (`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da
-bir telefona ilerleme/uyarı gönderir, ölürse checkpoint'ten devam ettirir, USB disk düşerse
-yeniden bağlar. Manifest: `LazyLora_Workspace/run_manifest.json`. Kanıt koşusunun
-checkpoint'leri `checkpoints/proof_dolly5/`, loss'ları `forward_loss.jsonl.proof`.
+(`/mnt/nvme/lazylora/checkpoints/lazy_lora_step_NNNNN.pt`, son 3 tutulur).
+
+**Ölçülen adım (adım 1, 9 Eylül):** **6 sa 59 dk 41 sn** — ileri 3 sa 11 dk 34 sn
+(123.6 s/katman, 93 katman), geri 3 sa 48 dk 07 sn (147.2 s/katman). Bu hızla 100 adım
+≈ **29 gün**, bitiş **~8-9 Ekim 2026**; canlı rakam
+`LazyLora_Workspace/run_manifest.json`'da. **Okuma hızı üç ayrı sayıdır, karıştırma:**
+(i) 110 MB/s **toplam**, tek ölçülen uçtan uca rakam — 8 sa 06 dk 57 sn'de
+3.219.659.335.955 bayt (`/proc` okuma sayacı), USB diskteki uzmanlar ile NVMe gövdesi
+birlikte; (ii) 61 MB/s tek katman süpürmesi içindeki **etkin** hız (14.5 GB / 238 s,
+Bulgular §16.5); (iii) 115 MB/s USB kutusunun **kendi sıralı testi** — cihazın özelliği,
+motorun ölçümü değil. RSS 4.0-4.7 GB, takas da kullanımda; bu motorun gördüğü en yüksek
+RSS 6.24 GB'dır ve daha eski bir 256 token'lık adımda ölçüldü (§17). Bekçi
+(`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da bir telefona
+ilerleme/uyarı gönderir, ölürse checkpoint'ten devam ettirir, USB disk düşerse yeniden
+bağlar. Kanıt koşusunun checkpoint'leri `checkpoints/proof_dolly5/`, loss'ları
+`forward_loss.jsonl.proof`.
+
+**Determinizm kontrolü teyit edildi:** asıl koşunun 1. adım loss'u kanıt koşusununkini altı
+ondalıkla yeniden üretti (0.909084). Doğrulama yöntemi: `dolly_tr_400.jsonl` ile
+`dolly_tr_proof.jsonl` ayrı ayrı ayrıştırılıp ilk beş kayıt karşılaştırıldı — birebir eşit;
+`scripts/build_train_set.py` kanıt dosyasını aynı seçimin `picked[:5]`'i olarak yazıyor
+(satır 80-82). İki koşu da sıfır ilklendirilmiş adaptörle başladığı için aynı sayıyı vermek
+zorundaydı (Bulgular §18.1).
+
+**Adaptörün şekli (bir yerde yazılı olsun):** yönlendirilen uzmanların LoRA'sı katman başına
+**tek** rank-16 adaptördür ve o katmanın **896 uzmanının tamamı** tarafından paylaşılır, MoE
+gizli uzayında (3584 → 3072 → 3584) — `lazy_lora/trainer/lazy_trainer.py:130`. Uzman başına
+adaptör değildir; öyle olsa ~2.6 × 10¹⁰ eğitilebilir parametre ederdi. Ablasyon gelecek iş
+(ölçüm notu §11, Bulgular §19.1).
+
+**Açık kaynak paketi yazıldı, quickstart HİÇ KOŞTURULMADI:** `LICENSE`, `NOTICE`,
+`docs/LICENSES.md`, `docs/QUICKSTART.md`, `scripts/quickstart.sh`,
+`scripts/make_tiny_model.py`, `docs/announce/`, `docs/measurement_note.md` (v1.2),
+`docs/traces/README.md`, `CITATION.cff`, `CONTRIBUTING.md`,
+`.github/workflows/quickstart.yml`, `pyproject.toml` ve `evidence/` depoda.
+**`scripts/quickstart.sh` bir kez bile koşturulmadı**: `docs/QUICKSTART.md`'deki her süre,
+bellek ve beklenen çıktı rakamı koddan okunarak yazıldı, ölçüm değil (makine dolu).
+Makine boşaldığında ilk iş budur: koştur, gerçek rakamlarla QUICKSTART'ı düzelt.
+`scripts/export_traces.py` de hiç koşturulmadı ve artık gerekmiyor: izler, yalnızca bu
+makinenin dosya yolları yer tutucuyla değiştirilerek `evidence/traces/`'e kondu. O dosyanın
+başındaki "telifli haber metni" uyarısı beş metnin gerçek kaynağı bilinmeden yazılmıştı
+ve yanlıştır.
+
+**Sıradaki iş — checkpoint gerektirmeyenler** (koşan eğitime dokunmadan yapılabilir):
+1. Ölçüm notundaki † işaretli iki rakamı (katman 1-8 dil imzası sınırı; eşit uzunlukta
+   yoğunlaşma kontrolü) `evidence/traces/` üzerinde `scripts/analyze_trace.py --prefix` ile
+   yeniden hesaplayıp sonucu Bulgular'a yaz, işareti kaldır. Checkpoint gerekmez, saniyeler
+   sürer — ama yine de python çalıştırır, makine boşken yap.
+2. `scripts/export_traces.py` başlığındaki yanlış telif uyarısını düzelt.
+3. Ön-kayıt commit'ine (`4e9eed1`, 8 Eylül 07:54:49) açıklamalı git etiketi koy. GitHub'da
+   ikinci bir zaman damgası verir; **bağımsız bir damga değildir** — eşiklerin tarihi hâlâ
+   bu makinenin saatine ve depo commit tarihlerine dayanır ve belgelerde zayıflık olarak
+   böyle yazılmalıdır.
+4. `Bulgular.md` içindekiler listesi 8. bölümde kalmış; 9-19 eklenmeli.
 
 **Nasıl bakılır:** `bash scripts/status.sh` · `cat LazyLora_Workspace/status.txt` ·
 `tail LazyLora_Workspace/forward_loss.jsonl` (adım başına loss; not: loss ileri geçiş
-sonunda yazılır, adımın geri geçişi ~2 saat daha sürer) ·
+sonunda yazılır, adımın geri geçişi 3 sa 48 dk daha sürer) ·
 `tr '\r' '\n' < LazyLora_Workspace/main_run_2026-09-09.raw | tail`.
 
 **Bittiğinde ne yapılacak:** `eval_perplexity.py --corpus tr_news,tr_wiki,en_wiki
@@ -84,9 +157,12 @@ LazyLoRA motoru, **2,78 trilyon parametreli Kimi K3'ün ileri geçişini bağım
 # 2. Sanal ortam (venv KOPYALANMAZ, yeniden kurulur)
 python3 -m venv /path/to/workspace/venv
 /path/to/workspace/venv/bin/pip install -r requirements.txt
-#    Not: requirements.txt bu makinenin tam donmuş listesidir. Gerekli asgari set:
-#    torch (CPU sürümü yeterli), numpy, transformers, tokenizers, tiktoken,
-#    safetensors, huggingface_hub, psutil, rich
+#    Not: requirements.txt artık bu makinenin donmuş listesi DEĞİL; motorun gerçekten
+#    import ettiği iki paket var: numpy>=1.24 ve torch>=2.3. Aynısını 'pip install -e .'
+#    de kurar. Ek paketler pyproject.toml'da ekstra olarak: [data] (transformers —
+#    gerçek tokenizer ve veri betikleri), [plot] (matplotlib — scripts/plot_proof.py).
+#    torch'u CPU indeksinden kurun: pip install --index-url
+#    https://download.pytorch.org/whl/cpu torch
 
 # 3. Yolları güncelle — lazy_lora/core/config.py içindeki PathConfig
 #    base_model_dir  -> Kimi K3 ağırlıklarının yeni konumu

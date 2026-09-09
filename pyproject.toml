@@ -1,0 +1,67 @@
+[build-system]
+# >=77 for PEP 639 `license`/`license-files` as written below.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lazy-lora"
+version = "0.1.0"
+description = "Out-of-core LoRA fine-tuning and expert-routing measurement for Kimi K3 on one laptop"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Ibrahim Polat" }]
+keywords = [
+    "out-of-core training",
+    "LoRA",
+    "parameter-efficient fine-tuning",
+    "mixture of experts",
+    "expert routing",
+    "Kimi K3",
+]
+
+# Exactly what the engine imports at run time, and nothing else. It parses safetensors
+# headers itself, so `safetensors` is deliberately not a dependency.
+#
+# torch >= 2.3 is a hard floor, not a preference: the loader reinterprets a numpy uint16
+# array as bfloat16 with torch.from_numpy(...).view(torch.bfloat16)
+# (lazy_lora/streaming/mmap_loader.py:326), and torch.from_numpy only gained uint16
+# support in 2.3.
+dependencies = [
+    "numpy>=1.24",
+    "torch>=2.3",
+]
+
+[project.optional-dependencies]
+# The real tokenizer, needed only on the data path against the real checkpoint.
+data = ["transformers"]
+# Figures for the measurement note (scripts/plot_proof.py).
+plot = ["matplotlib"]
+
+[project.urls]
+Homepage = "https://github.com/heyobi/LazyLora"
+Repository = "https://github.com/heyobi/LazyLora"
+
+# Discovery is explicit rather than automatic: `scripts/` is a directory of standalone
+# programs run by path, not an importable package, and automatic discovery would either
+# claim it or refuse to guess. The sub-packages carry no __init__.py of their own and are
+# imported as namespace packages, so each one has to be named here.
+[tool.setuptools]
+packages = [
+    "lazy_lora",
+    "lazy_lora.core",
+    "lazy_lora.dataset",
+    "lazy_lora.monitor",
+    "lazy_lora.native",
+    "lazy_lora.profiler",
+    "lazy_lora.streaming",
+    "lazy_lora.tests",
+    "lazy_lora.trainer",
+]
+
+# lazy_lora/native/__init__.py builds libmxfp4.so from mxfp4_gemm.c on first use and
+# stats the .c file before deciding, so both the source and the build script have to be
+# installed alongside the module. The .so itself is a build artefact and is not shipped.
+[tool.setuptools.package-data]
+"lazy_lora.native" = ["mxfp4_gemm.c", "build.sh"]

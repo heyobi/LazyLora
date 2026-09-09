@@ -11,7 +11,7 @@ Kimi K3's text tower ("kimi_linear") interleaves two different attention types:
   embedding is applied and the "rope" halves are carried through unrotated.
 
 The reference implementation delegates the KDA recurrence to Triton kernels from
-`fla`, which need a compute capability this machine's GTX 980 Ti does not have and
+`fla`, which need a compute capability this machine's GTX 1050 (sm_61) does not have and
 which do not run on CPU at all. The recurrence is therefore written out here in
 plain PyTorch, matching the semantics of `fused_recurrent_kda`:
 l2-normalised q/k, sigmoid beta, per-channel decay clamped at `gate_lower_bound`.

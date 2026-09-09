@@ -1,7 +1,21 @@
 [Unit]
 Description=LazyLoRA training watchdog (progress, health, auto-resume, push)
 
+# Runs scripts/watchdog.py. A *user* unit: install with
+#     install -Dm644 systemd/lazylora-watchdog.{service,timer} -t ~/.config/systemd/user/
+#     systemctl --user daemon-reload && systemctl --user enable --now lazylora-watchdog.timer
+#
+# Nothing below names a machine or a user. %h is the home directory of whoever runs the
+# unit, and both paths can be overridden without editing this file: put
+#     LAZYLORA_REPO=/path/to/LazyLora
+#     LAZYLORA_PYTHON=/path/to/venv/bin/python
+# in ~/.config/lazylora/watchdog.env, which is read after the defaults and wins over them.
+# With the defaults this runs exactly what it has always run:
+#     PYTHONPATH=~/calisma/LazyLora ~/venvs/lazylora/bin/python ~/calisma/LazyLora/scripts/watchdog.py
+
 [Service]
 Type=oneshot
-Environment=PYTHONPATH=/home/ibox/calisma/LazyLora
-ExecStart=/home/ibox/venvs/lazylora/bin/python /home/ibox/calisma/LazyLora/scripts/watchdog.py
+Environment=LAZYLORA_REPO=%h/calisma/LazyLora
+Environment=LAZYLORA_PYTHON=%h/venvs/lazylora/bin/python
+EnvironmentFile=-%h/.config/lazylora/watchdog.env
+ExecStart=/usr/bin/env PYTHONPATH=${LAZYLORA_REPO} ${LAZYLORA_PYTHON} ${LAZYLORA_REPO}/scripts/watchdog.py

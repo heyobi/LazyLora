@@ -28,7 +28,7 @@ class TestStreamingAndRingBuffer(unittest.TestCase):
         # Save to disk
         self.buffer.save_activation(layer_idx, act)
 
-        # File should exist on D: drive test directory
+        # File should exist in the workspace test directory
         filepath = os.path.join(self.test_cache_dir, f"act_layer_{layer_idx:03d}.bin")
         self.assertTrue(os.path.exists(filepath))
 

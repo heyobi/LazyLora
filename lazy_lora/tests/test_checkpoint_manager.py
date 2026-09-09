@@ -1,7 +1,7 @@
 """
 Tests LoRA checkpoint saving, file serialization, and parameter restoration.
 Verifies:
-1. Checkpoint file is written strictly to D: drive workspace.
+1. Checkpoint file is written strictly to the workspace, never to the system disk.
 2. Saved state dict includes all 93 layers' LoRA weights.
 3. Reloaded parameters match original weights bit-for-bit.
 """
@@ -41,7 +41,7 @@ class TestLoRACheckpointManager(unittest.TestCase):
                 pass
 
     def test_lora_checkpoint_save_and_reload(self):
-        """Builds LoRA layers, saves checkpoint to D: drive, and verifies bit-exact restoration."""
+        """Builds LoRA layers, saves a checkpoint to the workspace, and verifies bit-exact restoration."""
         num_test_layers = 4
         d_model = 128
         r = 16
@@ -83,7 +83,7 @@ class TestLoRACheckpointManager(unittest.TestCase):
             np.savez_compressed(ckpt_path, **state_dict)
             loaded_dict = np.load(ckpt_path)
 
-        self.assertTrue(os.path.exists(ckpt_path), f"Checkpoint was not created on D: drive: {ckpt_path}")
+        self.assertTrue(os.path.exists(ckpt_path), f"Checkpoint was not created on the workspace disk: drive: {ckpt_path}")
         self.assertGreater(os.path.getsize(ckpt_path), 0, "Checkpoint file size is 0 bytes")
 
         # Verify loaded weights match original

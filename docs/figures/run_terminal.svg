@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 612" width="940" height="612" font-family="ui-monospace, 'SF Mono', 'DejaVu Sans Mono', 'Liberation Mono', Menlo, monospace" role="img" aria-label="Bir LazyLoRA egitim adiminin terminal kaydi: 93 katman ileri, loss, 93 katman geri, AdamW, checkpoint; toplam 5 saat 41 dakika.">
+<style>
+  text { font-size: 14px; }
+  .gut { fill: #545e6b; font-size: 12.5px; }
+  .chrome { fill: #8a94a0; font-size: 12.5px; }
+  g[class^="l"] { opacity: 0; }
+  @keyframes blink { 0%,49% {opacity:1} 50%,100% {opacity:0} }
+  #cursor { animation: blink 1.06s step-end infinite; }
+  @media (prefers-reduced-motion: reduce) {
+    g[class^="l"] { opacity: 1; animation: none; }
+    #cursor { animation: none; }
+  }
+  @keyframes k0{0%,0.00%{opacity:0}0.00%,100%{opacity:1}}.l0{animation:k0 21.00s linear infinite} @keyframes k1{0%,3.17%{opacity:0}3.57%,100%{opacity:1}}.l1{animation:k1 21.00s linear infinite} @keyframes k2{0%,6.74%{opacity:0}7.14%,100%{opacity:1}}.l2{animation:k2 21.00s linear infinite} @keyframes k3{0%,10.31%{opacity:0}10.71%,100%{opacity:1}}.l3{animation:k3 21.00s linear infinite} @keyframes k4{0%,13.89%{opacity:0}14.29%,100%{opacity:1}}.l4{animation:k4 21.00s linear infinite} @keyframes k5{0%,17.46%{opacity:0}17.86%,100%{opacity:1}}.l5{animation:k5 21.00s linear infinite} @keyframes k6{0%,21.03%{opacity:0}21.43%,100%{opacity:1}}.l6{animation:k6 21.00s linear infinite} @keyframes k7{0%,24.60%{opacity:0}25.00%,100%{opacity:1}}.l7{animation:k7 21.00s linear infinite} @keyframes k8{0%,28.17%{opacity:0}28.57%,100%{opacity:1}}.l8{animation:k8 21.00s linear infinite} @keyframes k9{0%,31.74%{opacity:0}32.14%,100%{opacity:1}}.l9{animation:k9 21.00s linear infinite} @keyframes k10{0%,35.31%{opacity:0}35.71%,100%{opacity:1}}.l10{animation:k10 21.00s linear infinite} @keyframes k11{0%,38.89%{opacity:0}39.29%,100%{opacity:1}}.l11{animation:k11 21.00s linear infinite} @keyframes k12{0%,42.46%{opacity:0}42.86%,100%{opacity:1}}.l12{animation:k12 21.00s linear infinite} @keyframes k13{0%,46.03%{opacity:0}46.43%,100%{opacity:1}}.l13{animation:k13 21.00s linear infinite} @keyframes k14{0%,49.60%{opacity:0}50.00%,100%{opacity:1}}.l14{animation:k14 21.00s linear infinite} @keyframes k15{0%,53.17%{opacity:0}53.57%,100%{opacity:1}}.l15{animation:k15 21.00s linear infinite} @keyframes k16{0%,56.74%{opacity:0}57.14%,100%{opacity:1}}.l16{animation:k16 21.00s linear infinite} @keyframes k17{0%,60.31%{opacity:0}60.71%,100%{opacity:1}}.l17{animation:k17 21.00s linear infinite} @keyframes k18{0%,63.89%{opacity:0}64.29%,100%{opacity:1}}.l18{animation:k18 21.00s linear infinite} @keyframes k19{0%,67.46%{opacity:0}67.86%,100%{opacity:1}}.l19{animation:k19 21.00s linear infinite}
+</style>
+<rect width="940" height="612" rx="10" fill="#0d1017"/>
+<rect width="940" height="40" rx="10" fill="#161b22"/>
+<rect y="30" width="940" height="10" fill="#161b22"/>
+<circle cx="24" cy="20" r="6" fill="#ec6a5e"/><circle cx="46" cy="20" r="6" fill="#f4bf4f"/><circle cx="68" cy="20" r="6" fill="#61c554"/>
+<text x="470.0" y="25" class="chrome" text-anchor="middle">LazyLoRA — Kimi K3 2.78T — i7-7700HQ, 7.6 GB RAM, model on a USB disk</text>
+<text x="26" y="52" fill="#7fd6a2">$</text>
+<text x="44" y="52" fill="#e9ecf2">bash scripts/train_lazy_lora.sh --data dolly_tr_400.jsonl --steps 100 --seq-len 1024 --lr 5e-4</text>
+<g class="l0"><text x="26" y="74.0" class="gut">00:00:04</text><text x="134" y="74.0" fill="#8a94a0">Checking model weight integrity before starting training...</text></g>
+<g class="l1"><text x="26" y="96.5" class="gut">00:00:08</text><text x="134" y="96.5" fill="#8a94a0">shards in index : 96      bytes on disk : 1560.94 GB   (index says 1560.86 GB)</text></g>
+<g class="l2"><text x="26" y="119.0" class="gut">00:00:08</text><text x="134" y="119.0" fill="#7fd6a2">OK: every shard is present, complete and carries the tensors the index expects.</text></g>
+<g class="l3"><text x="26" y="141.5" class="gut">00:00:09</text><text x="134" y="141.5" fill="#8a94a0">[trunk] 2455 non-expert tensors served from k3trunk/trunk.bin</text></g>
+<g class="l4"><text x="26" y="164.0" class="gut">00:00:09</text><text x="134" y="164.0" fill="#8a94a0">[gpu] routed experts on NVIDIA GeForce GTX 1050</text></g>
+<g class="l5"><text x="26" y="186.5" class="gut">00:00:10</text><text x="134" y="186.5" fill="#e9ecf2">Target Steps : 100 | Micro-Batch: 1      Model Layers: 93</text></g>
+<g class="l6"><text x="26" y="209.0" class="gut">00:00:12</text><text x="134" y="209.0" fill="#5ad1ff">[FORWARD PASS] Layer 01/93 (MoE Stream)</text></g>
+<g class="l7"><text x="26" y="231.5" class="gut">00:20:48</text><text x="134" y="231.5" fill="#5ad1ff">[FORWARD PASS] Layer 11/93 (MoE Stream)</text></g>
+<g class="l8"><text x="26" y="254.0" class="gut">01:02:00</text><text x="134" y="254.0" fill="#5ad1ff">[FORWARD PASS] Layer 31/93 (MoE Stream)</text></g>
+<g class="l9"><text x="26" y="276.5" class="gut">01:43:12</text><text x="134" y="276.5" fill="#5ad1ff">[FORWARD PASS] Layer 51/93 (MoE Stream)</text></g>
+<g class="l10"><text x="26" y="299.0" class="gut">02:24:24</text><text x="134" y="299.0" fill="#5ad1ff">[FORWARD PASS] Layer 71/93 (MoE Stream)</text></g>
+<g class="l11"><text x="26" y="321.5" class="gut">03:09:43</text><text x="134" y="321.5" fill="#5ad1ff">[FORWARD PASS] Layer 93/93 (MoE Stream)</text></g>
+<g class="l12"><text x="26" y="344.0" class="gut">03:11:34</text><text x="134" y="344.0" fill="#e9ecf2">[FORWARD COMPLETE] (93 Layers) -&gt; Computing LM Head Cross-Entropy Loss...</text></g>
+<g class="l13"><text x="26" y="366.5" class="gut">03:11:34</text><text x="134" y="366.5" fill="#ffd772">[FORWARD LOSS] step 1: 0.9091  (perplexity 2.5)</text></g>
+<g class="l14"><text x="26" y="389.0" class="gut">03:16:38</text><text x="134" y="389.0" fill="#ffab6b">[BACKWARD PASS] Layer 91/93 (Grad Stream)</text></g>
+<g class="l15"><text x="26" y="411.5" class="gut">04:05:42</text><text x="134" y="411.5" fill="#ffab6b">[BACKWARD PASS] Layer 71/93 (Grad Stream)</text></g>
+<g class="l16"><text x="26" y="434.0" class="gut">04:54:46</text><text x="134" y="434.0" fill="#ffab6b">[BACKWARD PASS] Layer 51/93 (Grad Stream)</text></g>
+<g class="l17"><text x="26" y="456.5" class="gut">05:43:50</text><text x="134" y="456.5" fill="#ffab6b">[BACKWARD PASS] Layer 31/93 (Grad Stream)</text></g>
+<g class="l18"><text x="26" y="479.0" class="gut">06:32:54</text><text x="134" y="479.0" fill="#ffab6b">[BACKWARD PASS] Layer 11/93 (Grad Stream)</text></g>
+<g class="l19"><text x="26" y="501.5" class="gut">06:57:26</text><text x="134" y="501.5" fill="#ffab6b">[BACKWARD PASS] Layer 01/93 (Grad Stream)</text></g>
+<rect id="cursor" x="26" y="512.0" width="9" height="16" fill="#5ad1ff"/>
+<text x="26" y="550.0" fill="#6b7480" font-size="11.5">main run, step 1 of 100 - 1024-token packed sequence, LoRA rank 16, lr 1.0e-4 (warmup) - forward 3 h 11 m 34 s,</text>
+<text x="26" y="565.0" fill="#6b7480" font-size="11.5">backward 3 h 48 m 07 s, 6 h 59 m 41 s in total; peak resident set 4.7 GB. Start, forward-end and backward-end are</text>
+<text x="26" y="580.0" fill="#6b7480" font-size="11.5">measured; the layer times between them are interpolated at the measured pace. This run checkpoints every five steps,</text>
+<text x="26" y="595.0" fill="#6b7480" font-size="11.5">so step 1 saves nothing.</text>
+</svg>

@@ -196,12 +196,12 @@
 
   <header>
     <div class="eyebrow">Kanıt koşusu · 8–9 Eylül 2026</div>
-    <h1>2,78 trilyon parametreli bir model, 7,6 GB RAM'li bir dizüstünde <em>öğrendi</em></h1>
+    <h1>2,78 trilyon parametreli bir modelin LoRA adaptörü, 7,6 GB RAM'li bir dizüstünde <em>eğitildi</em></h1>
     <p class="lede">
       Kimi K3 belleğe sığmıyor: 1,56 TB'lık checkpoint bir USB harici diskte duruyor, 93 katmanın
       her biri sırayla diskten akıyor, RAM'de aynı anda tek katman kalıyor. Eğitilen tek şey
-      590 MB'lık LoRA adaptörü. Dün gece bu döngünün gerçekten öğrendiğini gördük: aynı diziyi
-      tekrar tekrar verdiğimizde loss her turda düştü.
+      590 MB'lık LoRA adaptörü; modelin 2,78 trilyon parametresine dokunulmuyor. Döngünün
+      doğru çalıştığını şöyle sınadık: aynı diziyi tekrar tekrar verdik ve loss her turda düştü.
     </p>
   </header>
 
@@ -257,10 +257,10 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><b>5,7 sa</b><span>bir eğitim adımı</span></div>
-      <div class="stat"><b>4,7 GB</b><span>en yüksek bellek</span></div>
+      <div class="stat"><b>6 sa 59 dk</b><span>adım (asıl koşu)</span></div>
+      <div class="stat"><b>4,5-4,7 GB</b><span>yerleşik bellek</span></div>
       <div class="stat"><b>590 MB</b><span>eğitilen ağırlık</span></div>
-      <div class="stat"><b>115 MB/s</b><span>disk bant genişliği</span></div>
+      <div class="stat"><b>1,56 TB</b><span>diskteki model</span></div>
     </div>
   </section>
 
@@ -290,16 +290,17 @@
     </p>
     <div class="figure strip">
       <div class="strip-row">
-        <span>ileri · 2,8 sa</span>
+        <span>ileri · 3 sa 11 dk</span>
         <div class="ticks" id="fwd" aria-hidden="true"></div>
       </div>
       <div class="strip-row">
-        <span>geri · 2,9 sa</span>
+        <span>geri · 3 sa 48 dk</span>
         <div class="ticks back" id="bwd" aria-hidden="true"></div>
       </div>
       <p class="caption">
-        93 + 93 katman, katman başına ortalama 110 saniye. Süreyi belirleyen hesap değil, diskin
-        okuma hızı: motor 115 MB/s'lik bandı doyuruyor.
+        93 + 93 katman: ileri geçişte katman başına 123 saniye, geri geçişte 147 saniye (asıl
+        koşunun 1. adımında ölçüldü). Süreyi belirleyen hesap değil okuma hızı: süreç ilk
+        sekiz saatte 3,22 TB okudu, saniyede 110 MB.
       </p>
     </div>
   </section>
@@ -321,8 +322,11 @@
       </table>
     </div>
     <p class="caption">
-      Beş Türkçe talimat örneği, 1024 token'lık iki pakete sıkıştırıldı (528'i eğitilen cevap
-      token'ı), lr 1e-3, warmup 2. Süreç 27 saat boyunca 4,5–4,7 GB bellekte kaldı.
+      Beş Türkçe talimat örneği iki pakete sıkıştırıldı: toplam 1082 token, 528'i eğitilen cevap
+      token'ı; dizi uzunluğu sınırı 1024, lr 1e-3, warmup 2. Süreç 27 saat boyunca 4,5–4,7 GB
+      bellekte kaldı; bu bir tepe değeri değil, projede kaydedilen en yüksek değer daha eski bir
+      256 token'lık adımdaki 6,24 GB. Bu adımlar 5,6–5,8 saat sürdü; asıl koşunun dolu 1024
+      token'lık dizileri daha çok uzman okuduğu için adım başına 7 saate çıktı.
     </p>
   </section>
 
@@ -356,8 +360,8 @@
     <h2>Şimdi ne dönüyor</h2>
     <p>
       9 Eylül 12:53'te asıl koşu başladı: 400 Türkçe talimat örneği, 1024 token'lık 154 paket
-      dizi, 100 adım, lr 5e-4 kosinüs. Adım başına 5,7 saatten ekim başında bitiyor. Bir
-      systemd zamanlayıcısı 15 dakikada bir ilerlemeyi telefona gönderiyor; süreç ölürse son
+      dizi, 100 adım, lr 5e-4 kosinüs. Ölçülen adım süresiyle yaklaşık 29 gün, yani 8-9 Ekim
+      civarında bitiyor. Bir systemd zamanlayıcısı 15 dakikada bir ilerlemeyi telefona gönderiyor; süreç ölürse son
       checkpoint'ten devam ettiriyor, USB disk düşerse yeniden bağlıyor.
     </p>
     <p>
@@ -368,8 +372,8 @@
   </section>
 
   <footer>
-    <div>Kod, ölçümler ve ham iz dosyaları: <a href="https://github.com/heyobi/LazyLora">github.com/heyobi/LazyLora</a></div>
-    <div>İleri geçiş, bağımsız bir C implementasyonuna karşı 93 katmanda doğrulandı (kosinüs ≥ 0,988).</div>
+    <div>Kod, ölçümler, 93 katmanlık kosinüs kaydı ve ham yönlendirme izleri: <a href="https://github.com/heyobi/LazyLora">github.com/heyobi/LazyLora</a> (<code>evidence/</code>)</div>
+    <div>İleri geçiş, bağımsız bir C implementasyonuna karşı 93 katmanın tamamında doğrulandı: her katman kosinüs 0,9857 ve üzeri, en düşük satır 71. katmanda 0,985744, çıkışta 0,99984.</div>
   </footer>
 
 </div>

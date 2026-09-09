@@ -1,6 +1,10 @@
 [Unit]
 Description=Run the LazyLoRA watchdog every 15 minutes
 
+# See lazylora-watchdog.service for the install command. Fifteen minutes is chosen against
+# the step time: a step is about seven hours, so the watchdog notices a stall long before a
+# step could have completed, and costs nothing while the trainer is reading the checkpoint.
+
 [Timer]
 OnBootSec=5min
 OnUnitActiveSec=15min

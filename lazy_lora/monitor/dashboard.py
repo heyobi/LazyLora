@@ -61,13 +61,13 @@ class TerminalDashboard:
         vram_bar = self._render_bar(m.vram_used_mb, m.vram_total_mb, length=20)
         ram_bar = self._render_bar(m.ram_used_gb, m.ram_total_gb, length=20)
         
-        lines.append(f" GPU VRAM (GTX 980 Ti): {m.vram_used_mb:.0f} / {m.vram_total_mb:.0f} MB  {vram_bar} (Peak: {m.vram_peak_mb:.0f} MB)")
-        lines.append(f" SYSTEM RAM (WSL/Host): {m.ram_used_gb:.1f} / {m.ram_total_gb:.1f} GB  {ram_bar}")
-        lines.append(f" Disk I/O (D: HDD)    : {m.disk_read_mbps:.1f} MB/s Streaming Throughput")
+        lines.append(f" GPU VRAM            : {m.vram_used_mb:.0f} / {m.vram_total_mb:.0f} MB  {vram_bar} (Peak: {m.vram_peak_mb:.0f} MB)")
+        lines.append(f" SYSTEM RAM          : {m.ram_used_gb:.1f} / {m.ram_total_gb:.1f} GB  {ram_bar}")
+        lines.append(f" DISK READ (model)   : {m.disk_read_mbps:.1f} MB/s streaming throughput")
         
         # Safety Alert
-        c_status = "[LOCKED & PROTECTED]" if m.c_drive_free_gb >= 8.0 else "[WARNING: LOW SPACE]"
-        lines.append(f" C: DRIVE SAFETY GUARD: {m.c_drive_free_gb:.1f} GB Free  ->  {c_status} (Zero C: Writes)")
+        c_status = "[OK]" if m.c_drive_free_gb >= 8.0 else "[WARNING: LOW SPACE]"
+        lines.append(f" SYSTEM DISK FREE    : {m.c_drive_free_gb:.1f} GB  ->  {c_status} (the run writes only to the scratch paths)")
 
         lines.append("-" * w)
         # Training Performance & Metrics

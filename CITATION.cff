@@ -1,0 +1,78 @@
+cff-version: 1.2.0
+message: >-
+  If you use LazyLoRA, please cite this repository together with the measurement note in
+  docs/measurement_note.md. If you use the measurements themselves — the expert-routing
+  traces, the layer-by-layer comparison log or the raw training losses in evidence/ —
+  cite the repository and say which commit you read, because the measurement documents
+  are still being corrected. There is no DOI yet.
+title: LazyLoRA
+version: 0.1.0
+# commit: <the release commit sha; fill this in at the release tag>
+# doi and identifiers: added when a DOI is minted for the repository release
+#   (code, evidence bundle and measurement note under one identifier)
+abstract: >-
+  An out-of-core LoRA fine-tuning and expert-routing measurement engine for Kimi K3,
+  a 2.78-trillion-parameter Mixture-of-Experts model, running on a single consumer
+  laptop with 7.6 GB of RAM and the 1.56 TB checkpoint on an external USB disk.
+  Weights are streamed from disk one layer at a time, layer-boundary activations are
+  kept in a ring buffer on NVMe, and the backward pass replays each layer under
+  autograd. The forward pass is verified layer by layer against an independent C
+  implementation and the backward pass by central finite differences on four layers.
+  The measurement note is docs/measurement_note.md, and the measurements it reports are
+  in evidence/: five expert-routing traces over all 92 MoE layers, the 93-layer
+  comparison log, the raw per-step training losses and the run manifest, with SHA256SUMS
+  over all of them.
+type: software
+authors:
+  - family-names: Polat
+    given-names: Ibrahim
+repository-code: https://github.com/heyobi/LazyLora
+url: https://github.com/heyobi/LazyLora
+license: Apache-2.0
+date-released: 2026-09-09
+keywords:
+  - out-of-core training
+  - LoRA
+  - parameter-efficient fine-tuning
+  - mixture of experts
+  - expert routing
+  - Kimi K3
+references:
+  - type: unpublished
+    title: >-
+      Expert Routing in a 2.78-Trillion-Parameter MoE, Measured on a Laptop
+    authors:
+      - family-names: Polat
+        given-names: Ibrahim
+    year: 2026
+    notes: >-
+      Measurement note, version 1.2, 10 September 2026: docs/measurement_note.md in this
+      repository. Every routing table in it is recomputable from evidence/traces/. It
+      supersedes docs/measurement_note_draft.md, which is kept only as a record and
+      carries a superseded banner. Not submitted anywhere yet.
+  - type: data
+    title: >-
+      Kimi K3 expert-routing traces: 92 MoE layers, five texts
+    authors:
+      - family-names: Polat
+        given-names: Ibrahim
+    year: 2026
+    url: https://github.com/heyobi/LazyLora/tree/main/evidence/traces
+    license: CC0-1.0
+    notes: >-
+      The evidence bundle for the measurement note, in evidence/ in this repository, not
+      as a separate dataset: five expert-routing traces recorded over all 92 MoE layers
+      on 6 September 2026 (trace.bin, trace.json, analysis.json, analysis.md each), the
+      93-layer comparison against kimi-k3-in-c, the raw per-step losses of the proof and
+      main training runs, and the run manifest. Format and provenance in
+      docs/traces/README.md. Routing arrays are CC0-1.0; the manifests, analyses, logs
+      and documentation around them are CC BY 4.0.
+  - type: software
+    title: kimi-k3-in-c
+    abstract: >-
+      Independent C implementation of Kimi K3, used as the reference oracle for the
+      layer-by-layer verification of LazyLoRA's forward pass.
+    authors:
+      - name: FareedKhan-dev and contributors
+    repository-code: https://github.com/FareedKhan-dev/kimi-k3-in-c
+    license: Apache-2.0

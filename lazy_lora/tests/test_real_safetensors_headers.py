@@ -1,5 +1,5 @@
 """
-Tests real downloaded Kimi K3 safetensors shards on D: drive and benchmarks disk read throughput.
+Tests real downloaded Kimi K3 safetensors shards on the model disk and benchmarks disk read throughput.
 Verifies:
 1. Safetensors 8-byte header size unpack and JSON indexing.
 2. Zero-copy mmap tensor extraction from real downloaded shards.
@@ -15,7 +15,7 @@ from lazy_lora.streaming.mmap_loader import SafetensorsIndex, MmapTensorStreamer
 
 
 class TestRealKimiK3Shards(unittest.TestCase):
-    """Inspects and benchmarks real downloaded Kimi K3 weights on D: drive."""
+    """Inspects and benchmarks real downloaded Kimi K3 weights on the model disk."""
 
     def setUp(self):
         self.config = get_default_config()
@@ -36,7 +36,7 @@ class TestRealKimiK3Shards(unittest.TestCase):
         print(f" 💾 REAL KIMI K3 SHARDS DISK I/O & READ SPEED BENCHMARK")
         print(f"=" * 70)
         print(f"  - Downloaded Shards Count : {len(shard_files)} shards")
-        print(f"  - Total Downloaded Size   : {total_shard_gb:.2f} GB on D: drive")
+        print(f"  - Total Downloaded Size   : {total_shard_gb:.2f} GB on the model disive")
 
         # 1. Indexing Benchmark
         t0_idx = time.perf_counter()

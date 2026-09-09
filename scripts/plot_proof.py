@@ -29,21 +29,21 @@ CA, CB = "#5ad1ff", "#ffab6b"
 
 TXT = {
     "tr": dict(
-        title="2,78 trilyon parametreli bir model,\n7,6 GB RAM'li bir dizüstünde öğrendi",
+        title="2,78 trilyon parametreli bir modelin LoRA\nadaptörü, 7,6 GB RAM'li bir dizüstünde\neğitildi",
         sub="Kimi K3 · 93 katman · katman başına 896 uzman · 1,56 TB checkpoint bir USB diskte\nLoRA adaptörü çekirdek-dışı eğitim: her katman diskten akar, RAM'de tek katman durur",
         xlabel="aynı dizi üzerinde kaçıncı tur", ylabel="loss (yalnız cevap token'ları)",
         sa="A dizisi", sb="B dizisi",
-        stats=[("5,7 sa", "adım başına"), ("4,7 GB", "en yüksek RAM"), ("590 MB", "eğitilen ağırlık"),
-               ("115 MB/s", "disk bant genişliği")],
-        foot="Kanıt koşusu, 8-9 Eylül 2026 · iki dizi, 1024 token, 528 eğitilen token · github.com/heyobi/LazyLora"),
+        stats=[("5,5-5,8 sa", "adım (kanıt koşusu)"), ("4,5-4,7 GB", "yerleşik bellek"), ("590 MB", "eğitilen ağırlık"),
+               ("1,56 TB", "diskteki model")],
+        foot="Kanıt koşusu, 8-9 Eylül 2026 · beş örnek, iki paket dizi (1082 token, 528'i eğitilen) · github.com/heyobi/LazyLora"),
     "en": dict(
-        title="A 2.78-trillion-parameter model\nlearned on a laptop with 7.6 GB of RAM",
+        title="A LoRA adapter on a 2.78-trillion-parameter\nmodel, trained out of core on a laptop\nwith 7.6 GB of RAM",
         sub="Kimi K3 · 93 layers · 896 experts per layer · a 1.56 TB checkpoint on a USB hard disk\nOut-of-core LoRA: every layer streams from disk, one layer at a time is resident",
         xlabel="pass over the same sequence", ylabel="loss (assistant tokens only)",
         sa="sequence A", sb="sequence B",
-        stats=[("5.7 h", "per step"), ("4.7 GB", "peak RAM"), ("590 MB", "trainable weights"),
-               ("115 MB/s", "disk bandwidth")],
-        foot="Proof run, 8-9 Sep 2026 · two 1024-token sequences, 528 trained tokens · github.com/heyobi/LazyLora"),
+        stats=[("5.5-5.8 h", "per step (proof run)"), ("4.5-4.7 GB", "resident set"), ("590 MB", "trainable weights"),
+               ("1.56 TB", "model on disk")],
+        foot="Proof run, 8-9 Sep 2026 · five examples in two packed sequences (1082 tokens, 528 trained) · github.com/heyobi/LazyLora"),
 }
 
 
@@ -93,9 +93,9 @@ def card(lang):
     t = TXT[lang]
     a, b, _ = load()
     fig = plt.figure(figsize=(6, 6), dpi=200, facecolor=BG)
-    fig.text(0.07, 0.955, t["title"], color=FG, fontsize=16.2 if lang == "en" else 17, fontweight="bold",
+    fig.text(0.07, 0.955, t["title"], color=FG, fontsize=15, fontweight="bold",
              va="top", linespacing=1.35)
-    fig.text(0.07, 0.815, t["sub"], color=MUTED, fontsize=8.3, va="top", linespacing=1.5)
+    fig.text(0.07, 0.787, t["sub"], color=MUTED, fontsize=8.3, va="top", linespacing=1.5)
     ax = fig.add_axes([0.135, 0.305, 0.80, 0.435], facecolor=BG)
     curve(ax, a, b, t, label_size=10)
     fig.add_artist(plt.Line2D([0.07, 0.93], [0.205, 0.205], color=GRID, lw=1.2))
@@ -147,5 +147,26 @@ def wide():
     plt.close(fig)
 
 
+
+def social():
+    """1280x640 card for the GitHub social preview (Settings -> Social preview)."""
+    t = TXT["en"]
+    a, b, _ = load()
+    fig = plt.figure(figsize=(12.8, 6.4), dpi=100, facecolor=BG)
+    fig.text(0.055, 0.90, "LazyLoRA", color=FG, fontsize=40, fontweight="bold", va="top")
+    fig.text(0.055, 0.735, "Out-of-core LoRA fine-tuning on a\n2.78-trillion-parameter MoE, on one laptop",
+             color=FG, fontsize=19, va="top", linespacing=1.45)
+    fig.text(0.055, 0.50, "Kimi K3 · 93 layers · 896 experts per layer\n1.56 TB checkpoint on a USB disk · 7.6 GB RAM\nthe 2.78 T weights stay frozen; a 590 MB adapter trains\nforward checked against an independent C engine\ngradients checked by finite differences",
+             color=MUTED, fontsize=13, va="top", linespacing=1.75)
+    fig.text(0.055, 0.085, "github.com/heyobi/LazyLora", color=CA, fontsize=13)
+    ax = fig.add_axes([0.55, 0.20, 0.40, 0.60], facecolor=BG)
+    curve(ax, a, b, t, label_size=10)
+    ax.set_title("proof run: loss on the same sequence, pass after pass",
+                 color=MUTED, fontsize=11, pad=24, loc="left")
+    fig.savefig(os.path.join(OUT, "social_preview.png"), facecolor=BG)
+    plt.close(fig)
+
+
 if __name__ == "__main__":
-    print(card("tr")); print(card("en")); wide(); print(os.path.join(OUT, "proof_loss_wide.png"))
+    print(card("tr")); print(card("en")); wide(); social()
+    print(os.path.join(OUT, "proof_loss_wide.png")); print(os.path.join(OUT, "social_preview.png"))

@@ -3,7 +3,7 @@ Expert access trace: what the router chose, layer by layer, token by token.
 
 This is the measurement instrument the research programme rests on (report §6.2, §6.3):
 a few hundred MB of (layer, token, chosen experts, weights) records lets anyone study
-expert concentration, cache policies and language-dependent routing without the 1.45 TB
+expert concentration, cache policies and language-dependent routing without the 1.56 TB
 checkpoint or this hardware. The format is deliberately trivial so it can be read with
 NumPy alone.
 

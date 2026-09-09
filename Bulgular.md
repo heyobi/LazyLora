@@ -1,6 +1,10 @@
 # 🔬 LazyLoRA & Kimi K3: Deneysel Bulgular ve Doğrulama Raporu
 
-Bu belge, **Moonshot AI Kimi K3 (2.78 Trilyon Parametreli MoE)** modeli ve **LazyLoRA Out-of-Core Motoru** üzerinde masaüstü tüketici donanımında (GTX 980 Ti + 16 GB RAM + NVMe SSD) gerçekleştirilen tüm deneysel testlerin, canlı ölçüm metriklerinin ve elde edilen bilimsel/mühendislik bulgularının resmi kayıt günlüğüdür.
+Bu belge, **Moonshot AI Kimi K3 (2.78 Trilyon Parametreli MoE)** modeli ve **LazyLoRA Out-of-Core Motoru** üzerinde tüketici donanımında gerçekleştirilen tüm deneysel testlerin, canlı ölçüm metriklerinin ve elde edilen bilimsel/mühendislik bulgularının resmi kayıt günlüğüdür.
+
+> **İki makine.** Rakamları birbirine taşımayın; hangi bölümün hangi makinede ölçüldüğü önemlidir.
+> **§1-15 masaüstü:** AMD Ryzen 5 3600, GTX 980 Ti, 16 GB RAM, Windows 11 + WSL2; ağırlıklar 1,86 TB'lık SATA diskte (§1; disk §10'da "NVMe değil, mekanik" diye düzeltildi).
+> **§16 ve sonrası dizüstü:** i7-7700HQ (4 çekirdek / 8 iş parçacığı, AVX2), 7,6 GB RAM, GTX 1050 2 GB, 117 GB NVMe (108,8 GB'ı paketlenmiş uzman olmayan gövde), 2 TB USB kutusundaki diskte 1.453,74 GiB = 1,56 TB checkpoint.
 
 ---
 
@@ -13,7 +17,18 @@ Bu belge, **Moonshot AI Kimi K3 (2.78 Trilyon Parametreli MoE)** modeli ve **Laz
 5. [Deney 2: 108.81 GB Gövde Paketleme (Packed Trunk) Analizi](#5-deney-2-10881-gb-gövde-paketleme-packed-trunk-analizi)
 6. [Deney 3: Tam 93 Katmanlı 2.78T Parametre Canlı Çıkarım Testi](#6-deney-3-tam-93-katmanlı-278t-parametre-canlı-çıkarım-testi)
 7. [Büyük Çıkarım Darboğazı & Teori Doğrulaması (Batching Paradoksu)](#7-büyük-çıkarım-darboğazı--teori-doğrulaması-batching-paradoksu)
-8. [Sıradaki Deney: 22x Spekülatif Ağaç Hızlandırma Hipotezi](#8-sıradaki-deney-22x-spekülatif-ağaç-hızlandırma-hipotezi)
+8. [Deney 4: 5-Token Spekülatif Doğrulama Testi (22x Hipotezi Doğrulandı)](#8-deney-4-5-token-spekülatif-doğrulama-testi-22x-hipotezi-doğrulandı)
+9. [Nöral Taslak Model & GPU CUDA Altyapısı Bulguları](#9-nöral-taslak-model--gpu-cuda-altyapısı-bulguları)
+10. [Donanım Gerçeğinin Düzeltilmesi: Disk NVMe Değil, Mekanik](#10-donanım-gerçeğinin-düzeltilmesi-disk-nvme-değil-mekanik)
+11. [Deney 5: Motorun Gerçek Kimi K3 Mimarisiyle Karşılaştırılması](#11-deney-5-motorun-gerçek-kimi-k3-mimarisiyle-karşılaştırılması)
+12. [Deney 6: Düzeltmeler Sonrası Gerçek Katman Maliyeti](#12-deney-6-düzeltmeler-sonrası-gerçek-katman-maliyeti)
+13. [Aktivasyon Büyümesinin İncelenmesi ve SiTU Aktivasyon Hatası](#13-aktivasyon-büyümesinin-incelenmesi-ve-situ-aktivasyon-hatası)
+14. [Tokenizasyon Sahteymiş: Loss Ölçümünü Geçersiz Kılan Hata](#14-tokenizasyon-sahteymiş-loss-ölçümünü-geçersiz-kılan-hata)
+15. [Deney 7: Referans Motorla Katman Katman Doğrulama](#15-deney-7-referans-motorla-katman-katman-doğrulama)
+16. [Deney 8: Yönlendirme Ölçümü, Türkçe ve İngilizce (5-6 Eylül 2026, yeni makine)](#16-deney-8-yönlendirme-ölçümü-türkçe-ve-ingilizce-5-6-eylül-2026-yeni-makine)
+17. [Deney 9: Beş Metin, 92 MoE Katmanı, Üç Dil ve Kod (6 Eylül 2026)](#17-deney-9-beş-metin-92-moe-katmanı-üç-dil-ve-kod-6-eylül-2026)
+18. [Deney 10: Öğrenme kanıtı — 5 örnek, 5 adım (8-9 Eylül 2026)](#18-deney-10-öğrenme-kanıtı--5-örnek-5-adım-8-9-eylül-2026)
+19. [Kanıt paketi depoya kondu (9 Eylül 2026)](#19-kanıt-paketi-depoya-kondu-9-eylül-2026)
 
 ---
 
@@ -88,7 +103,7 @@ Modelin 93 katmanının tamamını 8 GB RAM limitinde akıtabilmek (streaming) i
 
 ## 6. Deney 3: Tam 93 Katmanlı 2.78T Parametre Canlı Çıkarım Testi
 
-Tarihte ilk kez **2.78 Trilyon parametreli Kimi K3** modeli, **8 GB RAM'li bir tüketici bilgisayarında 93 katmanının tamamı** diskten akıtılarak çalıştırıldı:
+Bu makinede ilk kez **2.78 Trilyon parametreli Kimi K3** modeli, **8 GB RAM'li bir tüketici bilgisayarında 93 katmanının tamamı** diskten akıtılarak çalıştırıldı:
 
 ```text
 Command: ./bin/k3 ~/kimi_k3_model_weights --trunk ~/k3trunk --trunk-gb 2.5 --cache-gb 0.35 --tok ~/kimi_k3_model_weights --prompt "Hello" --incremental --gen 1
@@ -112,7 +127,7 @@ Command: ./bin/k3 ~/kimi_k3_model_weights --trunk ~/k3trunk --trunk-gb 2.5 --cac
 
 ## 7. Büyük Çıkarım Darboğazı & Teori Doğrulaması (Batching Paradoksu)
 
-Bu deney, [Fikirler.md (Fikir 3)](file:///c:/Users/Dell/Desktop/LazyLora/Fikirler.md#3-fikir-büyük-modelde-sohbet-darboğazı--spekülatif-kod-çözme)'te ortaya koyduğumuz teorik analizi deneysel olarak **%100 doğrulamıştır**:
+Bu deney, [Fikirler.md (Fikir 3)](Fikirler.md#3-fikir-büyük-modelde-sohbet-darboğazı--spekülatif-kod-çözme)'te ortaya koyduğumuz teorik analizi ölçümle doğruladı:
 
 $$T_{\text{token}} = \frac{\text{Trunk (108.8 GB)} + \text{Aktif Uzmanlar (25.8 GB)}}{\text{NVMe Bant Genişliği (50-100 MB/s)}} \approx 1654 \text{ saniye} \approx 27.5 \text{ dakika}$$
 
@@ -157,7 +172,7 @@ Spekülatif hızlandırmayı deterministik şablonlardan tam dinamik nöral ağa
 * **PyTorch Versiyonu:** `2.13.0+cu130`
 * **Transformers Versiyonu:** `5.16.1`
 * **CUDA Donanım Erişimi:** `True` (NVIDIA GeForce GTX 980 Ti, 6 GB VRAM, 5.1 GB Boş VRAM).
-* **Nöral Ağaç Motoru ([continuous_deep_tree_engine.py](file:///c:/Users/Dell/Desktop/LazyLora/scripts/continuous_deep_tree_engine.py)):**
+* **Nöral Ağaç Motoru ([continuous_deep_tree_engine.py](docs/attic/continuous_deep_tree_engine.py)):**
   * Softmax Logits ile gerçek autoregressive olasılık dağılımı.
   * Kümülatif log-olasılık ($\sum \log P$) sıralı Min-Heap öncelik kuyruğu.
   * SSD geçişi esnasında arka planda durmaksızın binlerce tokenlik ağaç dalları üreten GPU destekli sürekli üretim hattı.
@@ -223,7 +238,7 @@ $$S_t = S_{t-1}\operatorname{diag}(\alpha_t) + \beta_t\,k_t\,(v_t - S_{t-1}^\top
 
 q, k üzerinde L2 normalizasyon; $\beta_t = \sigma(b_{proj}(h_t))$; q/k/v üzerinde kernel=4 nedensel derinlemesine konvolüsyon (SiLU); çıkışta sigmoid-kapılı RMSNorm.
 
-**Uygulama notu:** Referans bu özyinelemeyi `fla` kütüphanesinin Triton çekirdeklerine devrediyor. Triton, GTX 980 Ti'nin hesaplama yeteneğinin (CC 5.2) üzerinde bir eşik ister ve CPU'da hiç çalışmaz. Bu nedenle özyineleme saf PyTorch ile yeniden yazıldı ([lazy_lora/core/attention.py](file:///c:/Users/Dell/Desktop/LazyLora/lazy_lora/core/attention.py)).
+**Uygulama notu:** Referans bu özyinelemeyi `fla` kütüphanesinin Triton çekirdeklerine devrediyor. Triton, GTX 980 Ti'nin hesaplama yeteneğinin (CC 5.2) üzerinde bir eşik ister ve CPU'da hiç çalışmaz. Bu nedenle özyineleme saf PyTorch ile yeniden yazıldı ([lazy_lora/core/attention.py](lazy_lora/core/attention.py)).
 
 **Doğrulama (gerçek ağırlıklarla, 16 token):**
 
@@ -327,13 +342,13 @@ Referans `_apply_attn_res`, artık akışını **toplamaz**; bankadaki anlık g�
 
 $$v = [\text{bank}; \text{prefix}], \quad k = \operatorname{RMSNorm}(v), \quad p = \operatorname{softmax}\big(\textstyle\sum_d k_d \cdot (w^{\text{norm}}_d w^{\text{proj}}_d)\big), \quad h = p^\top v$$
 
-Ayrıca her `attn_res_block_size = 12` katmanda bir akış bankaya yazılıp **sıfırdan başlatılır**. Bu mekanizma [attention.py](file:///c:/Users/Dell/Desktop/LazyLora/lazy_lora/core/attention.py) içine `apply_attn_res` olarak eklendi ve `forward_layer` referansın yapısına göre yeniden düzenlendi (`prefix_sum` + banka), sonda `output_attn_res_proj/norm` ve `model.norm` uygulanacak şekilde.
+Ayrıca her `attn_res_block_size = 12` katmanda bir akış bankaya yazılıp **sıfırdan başlatılır**. Bu mekanizma [attention.py](lazy_lora/core/attention.py) içine `apply_attn_res` olarak eklendi ve `forward_layer` referansın yapısına göre yeniden düzenlendi (`prefix_sum` + banka), sonda `output_attn_res_proj/norm` ve `model.norm` uygulanacak şekilde.
 
 ### 13.2 Asıl Hata: SiTU Aktivasyonu Yanlış Tanımlanmıştı
 
 Katman içi ölçüm, büyümenin kaynağının dikkat değil **paylaşılan uzman** olduğunu gösterdi: girdi birim normda iken çıktı `std = 8.12`.
 
-Referans tanım ([modeling_kimi_linear.py](file:///c:/Users/Dell/Desktop/LazyLora/), `SituAndMul`):
+Referans tanım ([modeling_kimi_linear.py](), `SituAndMul`):
 
 $$\text{situ}(g) = \beta \tanh(g/\beta)\,\sigma(g), \qquad u' = \gamma \tanh(u/\gamma), \qquad \text{out} = \text{situ}(g)\cdot u'$$
 
@@ -406,7 +421,7 @@ Bunun üzerine, loss'u yorumlamaya çalışmak yerine **bağımsız bir referans
 
 **Kritik nokta:** LoRA'da $B$ matrisi sıfırla başlatıldığından, eğitilmemiş adaptörlerin ileri geçişe katkısı tam olarak sıfırdır. Dolayısıyla motorumuzun logits'i, referansınkiyle **birebir aynı olmak zorundadır**. Bu, makul görünen ama yanlış bir loss'un yakalayamayacağı hataları ortaya çıkarır.
 
-Ayrıca C deposundaki `tests/fixtures/ops/` altında, her biri kendi ağırlıkları, girdileri ve **beklenen çıktılarıyla** gelen op-bazlı fixture'lar bulundu (tolerans `1e-5`). Bunlar [test_reference_ops.py](file:///c:/Users/Dell/Desktop/LazyLora/lazy_lora/tests/test_reference_ops.py) olarak süite eklendi.
+Ayrıca C deposundaki `tests/fixtures/ops/` altında, her biri kendi ağırlıkları, girdileri ve **beklenen çıktılarıyla** gelen op-bazlı fixture'lar bulundu (tolerans `1e-5`; sekiz fixture'ın yedisi bu toleransta eşleşti, MoE blok fixture'ı `2e-4` ile — §15.6). Bunlar [test_reference_ops.py](lazy_lora/tests/test_reference_ops.py) olarak süite eklendi.
 
 ### 15.2 Bulunan Hata: MXFP4 NaN Ölçeği
 
@@ -583,14 +598,15 @@ süpürme başına, token başına değil (rapor §3.2 doğrulandı).
 - Rapor §3.3'ün "şimdi" satırı (127 token, katman 740 s) bu makinede 122 s oldu: NVMe gövde,
   gather ve fazladan projeksiyon okumasının kaldırılması birlikte ~6 kat. K6 ve batch=2048
   ile raporun ~455 token/saat hedefi ulaşılabilir görünüyor.
-- İzler: `traces/profile_{128,512,1024}_2026-09-06/`.
+- İzler: `traces/profile_{128,512,1024}_2026-09-06/` (bu üçü depoda **değil**, §19).
 
 ---
 
 ## 17. Deney 9: Beş Metin, 92 MoE Katmanı, Üç Dil ve Kod (6 Eylül 2026)
 
 Model tamamlandıktan sonra izler 93 katmana genişletildi; füzyonlu çekirdekle metin başına
-1.3-1.9 saat. İzler `traces/*_L93_2026-09-06/`, her biri `analysis.md` ile.
+1.3-1.9 saat. İzler artık depoda: `evidence/traces/*_L93_2026-09-06/`, her biri `analysis.md`
++ `analysis.json` ile (§19).
 
 | metin | token | benzersiz/tekdüze (92 katman ort.) | katman 1 | katman 46 | katman 92 | top100 payı | entropi (bit) |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -648,7 +664,7 @@ metne özgü sıcak küme yeniden değerlendirilebilir.
 
 İngilizce paragrafın ilk 34 token'ı (BOS dahil; 32. token " front") C motorundan 93 katman
 geçirildi (61 dk, tepe RSS 5.2 GB, hatasız) ve LazyLoRA aynı diziyi katman katman karşılaştırdı
-(`cmp93_en34_2026-09-06.log`, 48 dk, 427 GB okuma):
+(`evidence/cmp93_en34_2026-09-06.log`, 48 dk, 427 GB okuma; 93 satırın tamamı depoda, §19):
 
 | katman | 12 | 24 | 48 | 72 | 84 | 88 | 90 | 91 | 92 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -656,7 +672,10 @@ geçirildi (61 dk, tepe RSS 5.2 GB, hatasız) ve LazyLoRA aynı diziyi katman ka
 | bizim std | 0.054 | 0.0062 | 0.0068 | 0.040 | 0.094 | 0.330 | 0.835 | 22.28 | 43.28 |
 | C std | 0.054 | 0.0062 | 0.0068 | 0.040 | 0.094 | 0.331 | 0.834 | 22.18 | 43.24 |
 
-93 katmanın tamamı bağımsız implementasyonla eşleşiyor (en düşük kosinüs 0.988, katman 72;
+93 katmanın tamamı bağımsız implementasyonla eşleşiyor (93 satırın hepsi 0.9857 ve üzeri;
+en düşük satır 0.985744 ile katman 71, en kötü kuşak katman 68-72; §17.1'in tablosundaki
+dokuz örnek satırın en düşüğü olan "0.988, katman 72" ifadesi 93 satırın tamamı için yanlıştı
+ve 10 Eylül'de kayıt yayımlanınca düzeltildi;
 bf16 hesabın 90 katman boyunca biriken farkı, blok sınırlarında sıfırlanıyor). Katman 91-92'deki
 dev aktivasyon **C motorunda da aynı**: modelin kendi davranışı, motor hatası değil. Bu, ileri
 geçişin 13 değil 93 katmanda doğrulandığı ilk kayıttır.
@@ -698,8 +717,12 @@ Loss ileri geçiş sonunda, yalnız cevap token'larında.
 | 5 | A | 0.157 | 1.17 | 11:03 |
 
 Aynı dizi için loss her turda düştü (A: 0.909 → 0.500 → 0.157; B: 0.521 → 0.193); B'nin
-ilk değeri A'dan düşük çünkü A üzerindeki ilk güncellemeden sonra ölçüldü. Adım süresi
-5.6-5.8 saat (ileri ~2.8 saat, 110 s/katman; geri ~2.9 saat). Süreç 27 saat boyunca
+ilk değeri A'dan düşük çünkü A üzerindeki ilk güncellemeden sonra ölçüldü. **Bu kanıt
+koşusunun** adım süresi 5.5-5.8 saat (ileri ~2.8 saat, 110 s/katman; geri ~2.9 saat;
+adımlar arası ölçülen aralıklar 19756 / 20813 / 20756 / 20093 sn,
+`evidence/forward_loss_proof.jsonl` zaman damgalarından) — iki paket dizi ~541'er token
+olduğu için; asıl koşunun 1024 token'lık adımı 6 sa 59 dk 41 sn sürüyor (§18.1) ve zaman
+projeksiyonlarında o rakam kullanılır. Süreç 27 saat boyunca
 RSS 4.5-4.7 GB'de kaldı; USB köprüsü bu sürede saatte ~45 kez sıfırlandı, hiçbir okuma
 kalıcı başarısız olmadı. 16 adımın kalanı bilgi katmayacağı için koşu 5. adımdan sonra
 durduruldu; checkpoint'ler `checkpoints/proof_dolly5/` (adım 1 ve 4).
@@ -720,3 +743,133 @@ AdamW → checkpoint döngüsü uçtan uca doğru çalışıyor ve kayıp azalt�
 mekanizma testiyle uğraşıyoruz). Modelin Türkçesinin gerçekten iyileşip iyileşmediği,
 eğitimde görülmemiş, modelin yayınından sonra yazılmış haber metni üzerinde önceden
 kaydedilmiş eşikle (§16.1: bpb 0.455 → ≤0.441) asıl koşudan sonra sınanacak.
+
+### 18.1 Asıl koşunun ilk adımı: süre, okuma hızı, determinizm kontrolü (9 Eylül 2026)
+
+Asıl koşu 9 Eylül 12:53:32'de başladı. İlk adım, 1024 token'lık tam bir paket dizi
+üzerinde ölçüldü:
+
+| Aşama | Süre | Katman başına (93 katman) |
+|---|---|---|
+| İleri | 3 sa 11 dk 34 sn (12:53:32 → 16:05:06, loss yazıldı) | 123.6 s |
+| Geri | 3 sa 48 dk 07 sn (16:05:06 → 19:53:13) | 147.2 s |
+| **Toplam adım** | **6 sa 59 dk 41 sn** | |
+
+Kanıt koşusunun 5.5-5.8 saatlik adımı (yukarısı) bu rakamın yerine kullanılamaz: oradaki
+iki paket dizi ~541'er token'dı, burada dizi tam 1024 token. 100 adım bu hızla ~29 gün
+eder (DEVAM "ŞU AN").
+
+**Okuma hızı.** Sürecin `/proc` okuma sayacı, koşunun 8 sa 06 dk 57 sn'sinde
+3.219.659.335.955 bayt gösteriyordu → **110 MB/s toplam**. Bu toplam, USB diskteki
+yönlendirilen uzmanlar ile NVMe gövdesindeki uzman olmayan ağırlıkların okumalarının
+birlikte hızıdır. USB kutusunun kendi sıralı testindeki ~115 MB/s ile karıştırılmamalıdır:
+o tek bir cihazın üst sınırıdır, ölçülen toplam değil.
+
+**Determinizm kontrolü — teyit edildi.** Asıl koşunun 1. adım loss'u, kanıt koşusunun
+1. adım loss'unu altı ondalık basamağıyla yeniden üretti: **0.909084**. Bu bir tesadüf ya
+da şüphe konusu değil, bir kontroldür; ve artık varsayım da değil, doğrulanmıştır.
+
+*Nasıl doğrulandı:* `datasets/dolly_tr_400.jsonl` ile `datasets/dolly_tr_proof.jsonl` ayrı
+ayrı ayrıştırılıp ilk beş kayıt karşılaştırıldı — beşi de birebir eşit. Zaten yapısı gereği
+öyle olmak zorundaydı: `scripts/build_train_set.py` kanıt dosyasını aynı seçimin
+`picked[:5]`'i olarak yazıyor (satır 80-82), yani kanıt kümesi eğitim kümesinin ilk beş
+örneğinin ta kendisidir ve iki koşunun ilk paket dizisi aynı token dizisidir.
+
+Gerisi mekanizma: LoRA B sıfır ilklendirildiği için eğitimsiz adaptörün ileri geçişe
+katkısı tam olarak sıfırdır (§15.1) ve iki koşuda da adaptör sıfırdan başlar. Aynı token
+dizisi + aynı donmuş ağırlıklar + aynı hesap yolu aynı sayıyı vermek zorundaydı;
+vermeseydi ileri geçişte belirlenimsiz bir şey var demekti. Her iki loss satırı da artık
+depoda: `evidence/forward_loss_proof.jsonl` ve `evidence/forward_loss_main.jsonl`; okuyan
+kendi gözüyle karşılaştırabilir.
+
+Yan sonuç, açıkça yazılması gereken bir şey: beş kanıt örneği eğitim kümesinin içindedir.
+Değerlendirme dilimlerinin hiçbirinde değildir.
+
+## 19. Kanıt paketi depoya kondu (9 Eylül 2026)
+
+Ölçümlerin ham hâli artık depoda: `evidence/`, 26 dosya, 6.2 MB; `SHA256SUMS` diğer 25'ini
+kapsıyor (`cd evidence && sha256sum -c SHA256SUMS`). İçindekiler:
+
+- **`evidence/traces/`** — beş yönlendirme izi (`zh_paragraph`, `en_paragraph`,
+  `tr_paragraph`, `tr_news`, `code_python`), 92 MoE katmanının tamamı, her biri
+  `trace.bin` + `trace.json` + `analysis.json` + `analysis.md`. Toplam 5.669.776 bayt
+  yönlendirme kaydı. §17'deki her tablo bunlardan yeniden hesaplanabilir: Tablo'daki
+  benzersiz/tekdüze oranları (0.43 / 0.54 / 0.56 / 0.50 / 0.53), katman 1/46/92 sayıları,
+  top100 payları ve entropiler `analysis.json`'lardan bire bir çıkıyor; §17.2'nin 0.258'lik
+  ardışık-token Jaccard'ı tek satır:
+  `jq -s '[.[]|.rows[].jac_t]|add/length' evidence/traces/*/analysis.json` → 0.25796.
+  Checkpoint yok, GPU yok, saniyeler sürüyor. Projenin en güçlü tek olgusu budur: rakamlar
+  artık "bizim logumuzda öyle yazıyor" değil, okuyanın kendi makinesinde tekrar edilebilir.
+- **`evidence/cmp93_en34_2026-09-06.log`** — §17.1'in karşılaştırması, 98 satır: katman
+  başına kosinüs, maksimum mutlak fark, iki std ve o katmanda okunan uzman sayısı. En düşük
+  kosinüs 0.985744 (katman 71), son katman 0.999840, toplam 2869 s ve 426.59 GB okuma. Tablodaki
+  dokuz satır bu 93 satırdan örneklendi; logun başındaki 34 token id'si
+  `evidence/traces/en_paragraph_L93_2026-09-06/trace.json`'un ilk 34 id'siyle aynıdır, iki
+  dosya birbirini denetler.
+- **`evidence/forward_loss_main.jsonl`, `forward_loss_proof.jsonl`** — adım başına loss,
+  perplexity ve Unix zaman damgası. Belgelerdeki bütün adım süreleri bunlardan türüyor:
+  main dosyasının son satırı (1788959106) eksi manifest'in `started` alanı (1788947613.66)
+  = 11.492 s, yani §18.1'in ileri geçişi (3 sa 11 dk 34 sn), süreç başlangıcı ile eğitmenin
+  ilk satırı arasındaki birkaç saniye farkla.
+- **`evidence/run_manifest.json`** — koşan işin manifesti; yollar yer tutucu.
+
+**Metinlerin kaynağı yanlış yazılmıştı, düzeltildi.** Beş izin metninin beşi de bu çalışma
+için yazıldı. Haber üslubundaki Türkçe paragraf fındık üretim istatistikleri üzerinedir ve
+Anadolu Ajansı'ndan, BBC Türkçe'den ya da başka bir yayından alınmamıştır. `docs/LICENSES.md`
+ve ölçüm notu onu daha önce "telifli haber metni, yayınlanmadan önce hash'e çevrilmeli" diye
+tarif ediyordu; bu, metnin nereden geldiği konusunda yanlıştı. Beş manifest de metnini ve
+token id'lerini olduğu gibi taşıyor; hiçbir şey saklanmadı, `sources.json` diye bir dosyaya
+da gerek kalmadı. (Değerlendirme külliyatı ayrı iştir: `build_eval_news.py` gerçek haber
+metnini koşarken indirir, o metin depoda değildir ve dağıtılmaz.)
+
+**Hiçbir şey yayın için yeniden üretilmedi.** Dosyalar koşuların yazdığı dosyaların
+kendisidir; tek değişiklik bu makinenin dosya yollarının yer tutucuyla değiştirilmesidir.
+
+**Hâlâ depoda olmayan — ve olmadığı açıkça yazılması gereken:** 1.56 TB'lık checkpoint, C
+motorunun katman katman dökümü, paketlenmiş NVMe gövdesi, 1.8 GB'lık eğitim checkpoint'leri
+ve sonlu fark logu. Sonlu fark koşumu sonucunu terminale yazıyor, dosya bırakmıyor; §11'deki
+rakamlar oradan alındı ve yeniden üretmek için gerçek checkpoint'te yeniden koşulmalı.
+`profile_{128,512,1024}` yardımcı izleri de depoda değil; dolayısıyla N=1024 birleşim noktası
+(~%85) ölçüm notundaki tek yeniden üretilemez rakam olarak kalıyor ve zaten katman 0-12 ile
+sınırlı olduğu için üst sınır sayılmalı.
+
+**İzlerin manifestlerinde tek tip olmayan bir alan var:** `token_norms` (katman × token artık
+normları, §17'deki dev aktivasyonun kaynağı) 6 Eylül sabahı üçüncü ile dördüncü koşu arasında
+eklendi; yalnızca `en_paragraph` ve `tr_paragraph` taşıyor. İngilizcedeki sıçrama
+(katman 92'de 21269.332, 32. token; medyan 78.036) ve Türkçede sıçrama olmaması bu iki
+dosyadan doğrulanabilir; Python kodundaki `):\n` sıçraması doğrulanamaz, o rakam koşunun
+terminal çıktısından okunmuştu.
+
+Belgeler buna göre düzeltildi: `docs/measurement_note.md` (v1.2), `docs/traces/README.md`
+(artık yayınlanacak bir veri setinin kartı değil, `evidence/traces/`'in belgesi), `NOTICE`,
+`docs/LICENSES.md`, `CITATION.cff`, `README.md`, `docs/QUICKSTART.md`, `evidence/README.md`
+ve `docs/announce/` altındaki duyuru metinleri. Üç şey birden düzeltildi: (1) izlerin
+"henüz yayınlanmadı, hiçbir yerde yok" ifadeleri kaldırıldı; (2) 93 satırlık log yayımlanıp
+sıralanınca "kosinüs ≥ 0.988, en düşük katman 72" rakamının 93 satırın değil §17.1'deki
+dokuz örnek satırın minimumu olduğu görüldü ve her belgede 0.9857 / katman 71 ile
+değiştirildi — daha önce 0.988 yazdığını söyleyen cümleler bilerek bırakıldı, düzeltmeyi
+gizlemek yerine söylemek daha değerli; (3) haber üslubundaki Türkçe paragrafın "telifli"
+diye tarif edilmesi düzeltildi.
+
+**`requirements.txt` artık bu makinenin donmuş listesi değil:** iki satırlık kurulum listesi
+(`numpy>=1.24`, `torch>=2.3`) ve başında PyTorch CPU indeksini gösteren bir yorum. Yani
+`pip install -r requirements.txt` ile `pip install -e .` artık aynı şeyi kuruyor; ek paketler
+(`[data]`, `[plot]`) `pyproject.toml`'da.
+
+### 19.1 Adaptörün şekli: katman başına tek adaptör, 896 uzman için ortak
+
+Hiçbir belgede yazmıyordu, oysa dikkatli okuyan ilk soracak şeydir: yönlendirilen uzmanların
+LoRA adaptörü **katman başına bir tanedir** ve o katmanın **896 uzmanının hepsi tarafından
+paylaşılır**. MoE gizli uzayında durur (3584 → 3072 → 3584), rank 16, alpha 32
+(`lazy_lora/trainer/lazy_trainer.py:130` ve oradaki yorum). Uzman başına bir adaptör
+**değildir**: öyle olsaydı 896 uzman × 92 katman × ~0.32 M parametre ≈ 2.6 × 10¹⁰ eğitilebilir
+parametre; fp32 ağırlık + gradyan + iki AdamW momenti ile parametre başına 16 bayttan
+~420 GB eder (paylaşılan adaptörün gerçek maliyeti 590 MB). 7.6 GB RAM'li bu makinenin işi
+değil. Dikkat katmanları ve iki paylaşılan uzman da katman başına kendi adaptörlerini
+taşır.
+
+Bu bir tasarım kararıdır, ölçüm değil: paylaşılan adaptörün bu ölçekte kısıt mı yoksa
+düzenleyici mi olduğu sınanmadı. Doğal ablasyon — uzman başına adaptör, ya da katman
+bandı/birlikte-etkinleşen uzman kümesi başına adaptör — gelecek iş olarak ölçüm notunun
+§11'inde adıyla yazılıdır; gruplamayı seçmenin doğal yolu da §17'nin yoğunlaşma ve örtüşme
+tablolarıdır.

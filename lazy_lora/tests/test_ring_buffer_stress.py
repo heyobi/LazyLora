@@ -16,7 +16,7 @@ from lazy_lora.streaming.activation_ring_buffer import ActivationRingBuffer
 
 
 class TestActivationRingBufferStress(unittest.TestCase):
-    """Stress tests 93-layer activation serialization to D: SSD and measures disk write/read throughput."""
+    """Stress tests 93-layer activation serialization to the NVMe scratch disk and measures disk write/read throughput."""
 
     def setUp(self):
         self.config = get_default_config()
@@ -58,7 +58,7 @@ class TestActivationRingBufferStress(unittest.TestCase):
         t_write = time.perf_counter() - t0_write
         write_speed_mb_s = total_act_mb / max(t_write, 0.0001)
 
-        # Verify all 93 files exist on D: drive
+        # Verify all 93 files exist on the scratch disk
         for l in range(num_layers):
             path = self.ring_buf.get_activation_path(l)
             self.assertTrue(os.path.exists(path), f"Activation file missing for layer {l}: {path}")
@@ -79,7 +79,7 @@ class TestActivationRingBufferStress(unittest.TestCase):
         read_speed_mb_s = total_act_mb / max(t_read, 0.0001)
 
         print(f"-" * 70)
-        print(f" 📊 MEASURED D: SSD DISK SPEED RESULTS:")
+        print(f" 📊 MEASURED SCRATCH-DISK SPEED RESULTS:")
         print(f"  - Disk Write Throughput   : {write_speed_mb_s:,.1f} MB/s ({t_write * 1000:.1f} ms for 93 layers)")
         print(f"  - Disk Read Throughput    : {read_speed_mb_s:,.1f} MB/s ({t_read * 1000:.1f} ms for 93 layers)")
         print(f"  - Round-Trip Data Integrity: 100% BIT-EXACT MATCH across all 93 layers ✅")
