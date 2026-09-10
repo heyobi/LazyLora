@@ -36,6 +36,10 @@ are in [`evidence/`](evidence/), and the judgement, check by check, of what this
 allowed to claim — which is the reason [How you know this is real](#how-you-know-this-is-real)
 is the longest section in this file.
 
+![The machine: a closed 2017 laptop on a cooling pad, a bare 2 TB Western Digital hard disk sitting on its lid, a USB-to-SATA cable](docs/figures/rig.jpg)
+
+*The machine. The 1.56 TB checkpoint lives on that disk; the USB bridge under it resets forty to fifty times an hour under this load and the engine retries each read, which is why the run has not stopped. Photograph taken on 10 September 2026, step 3 of the main run in progress.*
+
 ![One training step in the terminal: 93 layers forward, the forward loss, 93 layers backward](docs/figures/run_terminal.svg)
 
 *Step 1 of the main run, and nothing else: 93 layers forward in 3 h 11 m 34 s, the forward
