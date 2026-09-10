@@ -306,3 +306,20 @@ The numbers: a 1024-token step takes 7.44 hours, memory stays at 4-5 GB, the dis
 The README says on its first screen that the repository was written with heavy AI assistance; that is also why the verification is as heavy as it is.
 
 Code, measurements and raw logs: github.com/heyobi/LazyLora
+
+### Türkçe, kısa (LinkedIn kutusuna giren sürüm)
+
+7,6 GB RAM'li bir dizüstünde, 2,78 trilyon parametreli Kimi K3'ün üzerine LoRA adaptörü eğitiyorum.
+
+Model belleğe sığmıyor: 1,56 TB'lık ağırlıklar USB diskte duruyor, her katman sırayla diskten akıyor. Modelin kendisi donuk; eğitilen tek şey 590 MB'lık adaptör.
+
+Bu hafta döngünün çalıştığını gördüm: aynı diziyi tur tur verdim, loss 0,909 → 0,500 → 0,157. Bu bir ezber testi, mekanizma kanıtı; modelin iyileştiğinin kanıtı değil.
+
+Asıl önemsediğim doğrulama: ileri geçiş, bağımsız bir C implementasyonuyla 93 katmanın hepsinde karşılaştırıldı, karşılaştırmanın tamamı depoda. Motor her push'ta GitHub'ın makinesinde, model olmadan koşuyor.
+
+Bir adım 7,44 saat. 400 örneklik Türkçe koşu 9-11 Ekim civarı bitiyor; sonucu önceden git'e işlediğim eşikle ölçeceğim, olumsuzsa olumsuz yazacağım.
+
+Depo, yapay zekâ yardımıyla yazıldığını ilk ekranında söylüyor; doğrulamanın ağır olmasının sebebi bu.
+
+github.com/heyobi/LazyLora
+

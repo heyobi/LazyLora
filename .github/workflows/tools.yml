@@ -408,14 +408,14 @@ jobs:
           python scripts/eval_perplexity.py \
             --arch-json "$LAZYLORA_MODEL_DIR/config.json" \
             --tokenizer bytes \
-            --text "$TOOLS_DIR/ci_corpus.txt" \
+            --text "$TOOLS_DIR/ci_corpus.txt" --force \
             --chunk "$EVAL_CHUNK" --chunks "$EVAL_CHUNKS" \
             --tag ci-base
 
           python scripts/eval_perplexity.py \
             --arch-json "$LAZYLORA_MODEL_DIR/config.json" \
             --tokenizer bytes \
-            --text "$TOOLS_DIR/ci_corpus.txt" --corpus ci_corpus \
+            --text "$TOOLS_DIR/ci_corpus.txt" --corpus ci_corpus --force \
             --checkpoint "$LORA_CKPT" \
             --chunk "$EVAL_CHUNK" --chunks "$EVAL_CHUNKS" \
             --tag ci-lora
