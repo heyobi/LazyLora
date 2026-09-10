@@ -23,7 +23,7 @@ a defect, and it is reportable as one.
 | [`reddit_localllama.md`](reddit_localllama.md) | r/LocalLLaMA | EN | Written 9 Sep 2026, revised 10 Sep. **Not posted.** |
 | [`x_thread.md`](x_thread.md) | X, eleven posts | EN | Written 9 Sep 2026, revised 10 Sep. **Not posted.** |
 | [`linkedin.md`](linkedin.md) | LinkedIn, long form and short | TR + EN | Written 8 Sep 2026, revised 10 Sep. **Not posted.** |
-| [`email_c_reference_author.md`](email_c_reference_author.md) | Letter to the author of `kimi-k3-in-c` | EN | Written 9 Sep 2026. **Not sent.** |
+| *(not in this repository)* | Letter to the author of `kimi-k3-in-c` | EN | A letter to a named person, kept out of the tree. Publishing a letter before its recipient has read it makes it an announcement rather than a letter, and this one thanks him for work that caught a real bug in mine. |
 
 When one goes out, its row gets the date and the link to the live post, and the draft here
 stays as it was written so the two can be compared.
