@@ -47,8 +47,9 @@ fifth step. Rendered by
 
 *Türkçe okuyucu için:* proje günlüğü [DEVAM.md](DEVAM.md), deney kayıtları
 [Bulgular.md](Bulgular.md), fikir havuzu [Fikirler.md](Fikirler.md), kanıt koşusunun Türkçe
-anlatımı [docs/kanit_kosusu.html](docs/kanit_kosusu.html).
-<!-- A rendered copy of this page is published outside the repository; enable GitHub Pages (Settings -> Pages, main branch, /docs) once this repository is public and link it here. -->
+anlatımı [kanıt koşusu sayfası](https://heyobi.github.io/LazyLora/kanit_kosusu.html)
+(kaynağı [docs/kanit_kosusu.html](docs/kanit_kosusu.html), GitHub Pages ile bu depodan
+servis ediliyor).
 
 ---
 
