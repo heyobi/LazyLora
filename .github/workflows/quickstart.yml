@@ -1,10 +1,11 @@
-# This workflow has never been run either.
+# Runs scripts/quickstart.sh --fast on every push.
 #
-# It was written at the same time as scripts/quickstart.sh, on a machine that was busy
-# with a 29-day training run and could not execute either of them. Its first run on a
-# public GitHub runner IS the validation: it is the first time the quickstart executes
-# anywhere, and the first evidence that any of the numbers in docs/QUICKSTART.md Part 1
-# are the right order of magnitude. If this job is red, believe the job.
+# It was written at the same time as the quickstart, on a machine that was busy with a
+# 31-day training run and could not execute either of them, so its first run on a public
+# GitHub runner was the first time the quickstart executed anywhere. That run failed on the
+# finite-difference check, on a gradient that was correct; Bulgular.md section 20 records it
+# and the fix. The badge this job produces is the current claim about the engine: if it is
+# red, believe the badge, not the documentation.
 
 name: quickstart
 
@@ -38,7 +39,7 @@ jobs:
       # pass, ten real training steps, the finite differences - still runs. quickstart.sh
       # exits non-zero if any step fails, so no extra assertion is needed here.
       #
-      # Step 1 will report SKIP: the op fixtures live in the reference C repository and
-      # are not vendored here.
+      # Step 1 passes on a plain clone: the fifteen op fixtures are vendored at
+      # tests/fixtures/ops/ under Apache-2.0, so the comparison against kimi-k3-in-c runs here.
       - name: Run the quickstart
         run: bash scripts/quickstart.sh --fast

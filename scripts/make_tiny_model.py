@@ -17,12 +17,13 @@ the format, the quantisation and the geometry are real, which is what makes the 
 behaviour on it meaningful.
 
 ---------------------------------------------------------------------------------------
-!! WRITTEN WITHOUT BEING EXECUTED !!
+RUN ON EVERY PUSH; NEVER RUN ON THE AUTHOR'S HARDWARE.
 This file was written by reading the loader, the trainer and the MXFP4 kernel line by
-line while the machine was busy with the 29-day, 100-step training run, so it has never
-been run. It must be validated once that run frees the machine: `bash scripts/quickstart.sh`
-is the validation. Until then, treat every number in this docstring and every number it
-prints as DERIVED FROM THE CODE, not measured: the byte counts and the tensor counts below
+line while the machine was busy with the 31-day, 100-step training run. It now runs on
+every push, in both .github/workflows/quickstart.yml (step 2) and tools.yml, on GitHub's
+runners; the checkpoint it writes has carried a forward pass, ten training steps and a
+finite-difference check there. What is still unmeasured is the author's own hardware:
+treat every timing in this docstring as DERIVED FROM THE CODE, not measured, while
 were worked out from the geometry by hand, and the runtimes quoted in docs/QUICKSTART.md
 were reasoned about, not timed.
 ---------------------------------------------------------------------------------------

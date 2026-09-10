@@ -957,3 +957,18 @@ kopyalandı. Artık motor, her push'ta, iki implementasyonun da yazarının kont
 makinede başkasının aritmetiğine karşı sınanıyor: sekiz op'un yedisi 1e-5 mutlak, latent MoE
 bloğu 2e-4 mutlak ve kosinüs 1.000000 ile eşleşiyor.
 
+### 20.4 Aynı kontrolün ikinci düşüşü ve ikinci alt sınır (10 Eylül, öğleden sonra)
+
+Adım kuralı tensör normuna bağlandıktan sonra kontrol bir koşucuda 4.9e-3 ile geçti, aynı
+kodla bir sonrakinde `shared_gate_lora.B` yönünde 2.04e-2 ile toleransın (2e-2) hemen
+üstünde düştü. Fark koddan değil işlemciden geliyordu: farklı koşucular fp32'yi farklı
+yuvarlıyor ve o yönün adımı (1.3e-3) kaybı yalnız birkaç yüz birim oynatıyordu, yani
+koşudan koşuya değişen yuvarlama, sinyalin büyük bir kısmıydı. Bankanın normu büyük olduğu
+için oradaki sorunu çözen kural, normu küçük LoRA tensörlerinde yetmiyordu.
+
+İkinci bir alt sınır eklendi (`SIGNAL_ULPS = 2000`): adım, kaybı en az 2000 fp32 birimi
+kadar oynatacak büyüklükte seçiliyor; eğim tahmini olarak analitik değer kullanılıyor. Aynı
+yön yeni kuralla eps=6.0e-3'te 7.71e-5 ile eşleşti; koşumun en kötü yönü 1.95e-3, toleransın
+on kat altında. Ders aynı: bir sonlu fark, ancak kaybın kendi çözünürlüğünün belirgin
+biçimde üstünde bir sinyal ölçüyorsa anlamlıdır, ve bu çözünürlük makineden makineye
+değişir.

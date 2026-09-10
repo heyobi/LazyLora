@@ -8,9 +8,29 @@ it was corrected rather than re-ticked. Numbers quoted here are the ones in
 [`numbers.md`](numbers.md); where this document and that table disagree, that table names the
 source and the source settles it.*
 
+**Publication happened. The repository became public on 10 September 2026**, at
+<https://github.com/heyobi/LazyLora>, with GitHub Pages serving `docs/` from `main`. This
+document is sealed on that date, which changes what each section is for:
+
+- **Sections 1 and 2 are closed records.** They say what was checked before the repository
+  was public and what the checking found wrong, as of the moment it went public. They are
+  not edited again — not to add a later fix, not to append a defect found afterwards, and
+  above all not to soften a row in section 2 once somebody has read it. A checklist that
+  keeps being improved after the fact stops being evidence of anything.
+- **Section 3 is the living part**, and it still is not tidied when a post goes out. An item
+  leaves it only by being fixed, and when one does it moves to
+  [Closed since publication](#closed-since-publication) below — with the date, the commit and
+  the check that settles it — rather than being deleted. What was wrong is the most valuable
+  thing in this file; nothing here is ever quietly removed.
+- Anything found wrong **after** 10 September 2026 belongs in section 3 or in the issue
+  tracker, never in sections 1 and 2.
+
 ---
 
 ## 1. Checked before publication
+
+*Closed record, sealed 10 September 2026. Every tick was verified on the day the repository
+became public and is not re-ticked, amended or extended afterwards.*
 
 ### Legal and provenance
 
@@ -135,6 +155,10 @@ since the first version of this checklist, where it was only true of the working
 
 ## 2. Corrected in the checking
 
+*Closed record, sealed 10 September 2026, for the same reason as section 1: a list of one's
+own errors is worth something only if it stops growing and shrinking after publication. Later
+corrections go to section 3 and then to* Closed since publication, *not into this table.*
+
 Every row is a thing this repository asserted and that turned out to be wrong. None of them
 was found by a reader.
 
@@ -176,8 +200,11 @@ was found by a reader.
 **This section is not tidied when a post goes out.** Nothing is removed from it because it
 has become inconvenient, because a thread is live, or because a launch looks better without
 it. An item leaves this list when it is fixed and the fix is checkable, and in no other
-circumstance. If you are reading this after the announcement and the list looks short, that
-is the thing to be suspicious of.
+circumstance — and when one is fixed it moves down to
+[Closed since publication](#closed-since-publication) with the date and the commit, so that
+the list of what was wrong keeps growing even as the list of what is wrong shrinks. If you
+are reading this after the announcement and the list looks short, that is the thing to be
+suspicious of.
 
 ### The measurements a reader cannot reproduce
 
@@ -199,7 +226,12 @@ is the thing to be suspicious of.
   over `tr_news,tr_wiki,en_wiki` needs the step-100 checkpoint, which does not exist yet. Until
   then, everything this repository demonstrates is that the machinery is correct, which is a
   different and smaller claim. The threshold is fixed in advance (`DEVAM.md` §16.1) and a
-  negative result will be published as a negative result.
+  negative result will be published as a negative result. Since 10 September 2026 the harness
+  is at least exercised on a runner once `.github/workflows/tools.yml` has a green run (it was committed on 10 September and its first run is the test): it exercises `scripts/eval_perplexity.py`,
+  `scripts/demo_generate.py` and `scripts/export_traces.py` on a GitHub runner against the
+  tiny generated checkpoint, because until then none of the three had been executed anywhere
+  and an evaluation script that broke on 9 October would have cost days. That establishes
+  that they run. It says nothing about the answer.
 - **`eval/results.jsonl`, the eval corpus manifests, `run_proof.sh` and `run_main.sh` are not
   in this repository.** The baseline bits-per-byte figures (0.455 / 0.311 / 0.194) rest on a
   file the reader cannot open. No document may cite one of these paths as though a reader
@@ -257,26 +289,60 @@ is the thing to be suspicious of.
 - **`scripts/watchdog.py` hardcodes `/mnt/nvme` and `/mnt/disk2tb`** in its metrics probes.
   `hdd_reconnect.sh`, `train_lazy_lora.sh` and `run_mock_tests.sh` have their `LAZYLORA_*`
   fallbacks; this one does not, so it works on exactly one machine.
-- **`docs/kanit_kosusu.html`**: the step-table column is still headed "Bitiş" where it means
-  the end of the *forward* pass — the loss is written when the forward finishes and the
-  backward runs about three hours longer. The same page says the proof steps took
-  "5,6-5,8 saat"; the four measured intervals are 5.78, 5.49, 5.77 and 5.58 h, so the range is
-  5,5-5,8 as it is everywhere else. It also still says the main run's step is "7 saate", which
-  is now 7.44 h.
-- **Three places still describe the op fixtures as living only in the reference repository.**
-  `.github/workflows/quickstart.yml` describes itself as never having run and predicts that
-  step 1 will report SKIP for missing fixtures; `README.md`'s reproduction tiers still list
-  "a `kimi-k3-in-c` clone" as what the op fixtures require, and still tell the reader to point
-  `LAZYLORA_REF_FIXTURES` at that clone. All of that was true when written. None of it is
-  true now: the fixtures are vendored at `tests/fixtures/ops/` and step 1 passes.
-- **`README.md` still links the Turkish walkthrough to a `claude.ai` artifact URL** that
-  resolves for one person. Every other reference in this repository points at something a
-  reader can open. Either GitHub Pages serves `docs/kanit_kosusu.html` and the link points
-  there, or the parenthetical goes; the vendor URL should not survive publication.
-- **`docs/share_post.md` was merged into `docs/announce/linkedin.md` and deleted.** The two
-  files carried the same two paragraphs with a note telling the reader to keep them in sync,
-  which is exactly the pattern that let "cosine >= 0.988, minimum at layer 72" survive in five
-  documents at once. There is now one copy.
+- **`.github/workflows/quickstart.yml` still introduces itself as a workflow that has never
+  run**, and its comment above the last step still predicts that "Step 1 will report SKIP:
+  the op fixtures live in the reference C repository and are not vendored here." Both
+  sentences were true when the file was written and neither is true now — the workflow has
+  run on every push since 10 September 2026 and the fixtures are committed at
+  `tests/fixtures/ops/`. It is the last place in the tree that describes the old
+  arrangement: `grep -n 'SKIP' .github/workflows/quickstart.yml` is the check, and an empty
+  result closes this item.
+
+### Closed since publication
+
+Items that were open in section 3 and have since been fixed. They are moved here rather than
+deleted, with what was wrong stated first and the fix second, because a reader who wants to
+know how careful this project is learns more from the defect than from its absence.
+
+- **`README.md` linked the Turkish walkthrough to a `claude.ai` artifact URL** that resolved
+  for one person, in a repository where every other reference points at something a reader
+  can open. **Resolved 10 September 2026** (commit `a1b694b`, "Point the Turkish results page
+  at its published address"): GitHub Pages serves `docs/` from `main`, the page is live at
+  <https://heyobi.github.io/LazyLora/kanit_kosusu.html> and returns 200, and the Turkish
+  paragraph in `README.md` links there with the source file named beside it. The vendor URL
+  did not survive publication: `grep -rn 'claude\.ai' .` now matches nothing but this
+  sentence.
+- **The op fixtures were an external check only for a reader who had also cloned
+  `kimi-k3-in-c`**, and three places in the tree said so. **Resolved 10 September 2026**
+  (commit `be8c458`, "Vendor the reference op fixtures so the external check runs for
+  everybody"): the fifteen fixtures are committed at `tests/fixtures/ops/`, 8.8 MB under
+  their own `SHA256SUMS`, Apache-2.0, attributed in `NOTICE` and in
+  `tests/fixtures/ops/README.md`. Step 1 of the quickstart now passes on a plain clone
+  instead of reporting SKIP, so the comparison against an independent implementation runs in
+  continuous integration on every push, on a machine neither author controls;
+  `README.md`'s reproduction tiers and its quickstart table were corrected to say so, and
+  `LAZYLORA_REF_FIXTURES` is now documented as the override for a reader who would rather
+  trust their own clone than this copy. What is still wrong is only the workflow file's own
+  header comment, which is listed above as its own item.
+- **`docs/kanit_kosusu.html` carried three wrong numbers or labels**: the step table's last
+  column was headed "Bitiş" where it meant the end of the *forward* pass only — the loss is
+  written when the forward finishes and the backward runs about three hours longer; the page
+  said the proof steps took "5,6-5,8 saat" where the four measured intervals are 5.78, 5.49,
+  5.77 and 5.58 h, so the range is 5,5-5,8 as it is everywhere else; and it still quoted the
+  main run's step as "7 saate" after the measured cadence had become 7.44 h. **Resolved
+  10 September 2026**, the day the page went live on GitHub Pages: the column now reads
+  "İleri geçiş bitti" with a caption explaining why the difference of two such stamps is
+  still a whole step, the four intervals are printed individually beside the 5,5-5,8 range,
+  and every step figure on the page is now the 7,44 h cadence with the 6 h 59 m step-1 total
+  named as what it is. The page also now says, in Turkish, that the 7.26 h and 7.62 h
+  intervals were read from the live log and are not in the `evidence/` snapshot — the same
+  caveat this file keeps under *Numbers in this repository that are not fully sourced*.
+- **`docs/share_post.md` and `docs/announce/linkedin.md` carried the same two paragraphs**,
+  with a note telling the reader to keep them in sync — exactly the pattern that let "cosine
+  ≥ 0.988, minimum at layer 72" survive in five documents at once. **Resolved before
+  publication:** `share_post.md` was merged into `linkedin.md` and deleted. There is now one
+  copy.
+
 ### The standing risk
 
 The list above is what is known to be wrong. The list of what is wrong is longer, because

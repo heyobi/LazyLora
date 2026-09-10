@@ -25,8 +25,10 @@ NVMe. The expert reads alone are four to seven minutes at the read rates measure
 training - 110 MB/s aggregate over the USB disk and the NVMe trunk together (3.22 TB
 through read() in 8 h 06 m 57 s of the main run) and 61 MB/s effective within a single
 layer sweep (14.5 GB per MoE layer in 238 s, Bulgular.md 16.5). No generation has ever
-been run on this engine, so the first run replaces this number; --minutes-per-token
-overrides it in the meantime.
+been run against the real checkpoint, so the first run replaces this number;
+--minutes-per-token overrides it in the meantime. (The continuous-integration run below
+generates in milliseconds per token against an 8 MB synthetic model, which says nothing
+whatever about the cost of a sweep over 1.56 TB.)
 
 On that estimate a fifty-token answer is about a four-hour job, and answering five prompts
 twice (adapter off, adapter on) at fifty tokens each is about forty hours.
@@ -45,19 +47,45 @@ every token, and the peak is one token's worth.
 =======================================================================================
 
 ---------------------------------------------------------------------------------------
-!! WRITTEN WITHOUT BEING EXECUTED !!
-Written by reading the engine while the machine was busy with the 100-step training run,
-so it has never been run. Validate it once the run frees the machine - the cheap way is
-against the tiny model from scripts/make_tiny_model.py:
+NEVER RUN AGAINST THE REAL CHECKPOINT; RUN ON EVERY PUSH AGAINST A SYNTHETIC ONE
+Written by reading the engine while the machine was busy with the 100-step training run.
+It has still never generated a token from Kimi K3 - that waits for the run to finish
+around 9-11 October 2026 - but it is no longer unexecuted code:
+.github/workflows/tools.yml runs it on every push, on a GitHub runner, against the tiny
+synthetic model from scripts/make_tiny_model.py, and asserts the output file afterwards.
+If that job is green, the generation loop, the prompt build, the per-token write to disk
+and the adapter toggle have all run. If it is red, believe the job.
+
+The same thing by hand:
 
     python scripts/make_tiny_model.py /tmp/tiny
+    printf 'iki arti iki\n' > /tmp/prompts.txt
     LAZYLORA_MODEL_DIR=/tmp/tiny LAZYLORA_WORKSPACE_DIR=/tmp/tinyws \
     LAZYLORA_FAST_SCRATCH_DIR=/tmp/tinyscratch LAZYLORA_TRUNK_DIR= \
       python scripts/demo_generate.py --arch-json /tmp/tiny/config.json --adapter off \
-        --prompts /tmp/prompts.txt --max-new-tokens 4 --out /tmp/out.json
+        --tokenizer bytes --prompts /tmp/prompts.txt --max-new-tokens 4 --out /tmp/out.json
 
-which exercises every line of this file in seconds (the tiny model has no tokenizer, so
-it falls back to byte ids and the "answer" is noise - that is fine, it is a smoke test).
+which exercises every line of this file in seconds. `--tokenizer bytes` is required there
+and is the whole caveat: the tiny model ships no tokenizer, so the ids are UTF-8 bytes and
+the "answer" is noise. See WHICH TOKENIZER below.
+
+WHICH TOKENIZER
+---------------
+--tokenizer model (the default) loads Kimi K3's own tokenizer out of the checkpoint
+directory, with its chat template. That is the only setting that can produce an answer
+worth reading, and it is what the real run will use.
+
+--tokenizer bytes selects the dataset iterator's byte fallback (byte -> byte + 100,
+dataset/stream_dataset.py:130-140). It is not the model's tokenizer and not a tokenizer of
+the model at all: the ids have no relation to the vocabulary any real checkpoint was
+trained on, and there is no chat template, so the prompt is rendered as a plain
+transcript. Everything it produces is noise by construction. It exists so that the
+mechanism can be exercised where no tokenizer is installed, it must be asked for
+explicitly, and the output JSON records `"tokenizer": {"kind": "bytes",
+"meaningful_text": false}` so that no file produced this way can be mistaken for evidence.
+There is deliberately no automatic fallback: with --tokenizer model a missing or
+unloadable tokenizer is a hard error, because a run that quietly swapped the vocabulary
+would look completely normal and mean nothing.
 ---------------------------------------------------------------------------------------
 
 HOW THE PROMPT IS BUILT
@@ -144,11 +172,126 @@ def load_prompts(path):
     return out
 
 
-def load_tokenizer(model_dir):
-    """Kimi K3's own tokenizer, from the checkpoint directory, with its chat template."""
+# --------------------------------------------------------------------------- tokenizer
+
+BYTE_ID_OFFSET = 100      # dataset/stream_dataset.py:136 - byte b becomes id b + 100
+
+
+class ByteFallbackTokenizer:
+    """
+    The dataset iterator's byte fallback (dataset/stream_dataset.py:130-140), wrapped in
+    the small slice of the tokenizer interface this script and eval_perplexity.py use.
+
+    IT IS NOT A TOKENIZER OF ANY MODEL. It maps UTF-8 byte b to id b + 100, so its ids
+    stand in no relation to the 163840-entry vocabulary Kimi K3 was trained on, and it has
+    no chat template - `apply_chat_template` renders a plain `role: content` transcript,
+    which is not the tag format the model was trained with. Text generated through it is
+    noise, and a loss computed through it measures nothing.
+
+    It exists for exactly one purpose: to let the machinery around the tokenizer - the
+    generation loop, the sampler, the per-token write to disk, the adapter toggle, the
+    evaluation harness's chunking and bits-per-byte arithmetic - be exercised against the
+    tiny synthetic model of scripts/make_tiny_model.py, which ships no tokenizer. It is
+    never selected automatically; `--tokenizer bytes` has to ask for it, and every file
+    written while it is in use is stamped `meaningful_text: false` / `meaningful: false`.
+
+    `encode` deliberately adds neither BOS nor EOS, which is the convention
+    scripts/build_eval_corpus.py writes its *_ids.json in ("the token ids, exactly
+    --tokens of them, no BOS"); `apply_chat_template` adds the BOS itself, as the model's
+    template would.
+    """
+
+    name = "byte-fallback"
+    is_real = False
+    unk_token_id = None
+
+    def __init__(self, bos_token_id, eos_token_id):
+        self.bos_token_id = int(bos_token_id)
+        self.eos_token_id = int(eos_token_id)
+
+    def encode(self, text):
+        return [b + BYTE_ID_OFFSET for b in str(text).encode("utf-8")]
+
+    def apply_chat_template(self, messages, tokenize=True, add_generation_prompt=False):
+        if not tokenize:
+            raise ValueError("ByteFallbackTokenizer only renders token ids")
+        parts = [f"{m.get('role', 'user')}: {m.get('content', '')}\n" for m in messages]
+        if add_generation_prompt:
+            parts.append("assistant:")
+        return [self.bos_token_id] + self.encode("".join(parts))
+
+    def decode(self, ids, skip_special_tokens=False):
+        """Byte ids back to text; anything outside the byte range is an id, not a byte."""
+        out, buf = [], bytearray()
+        for i in ids:
+            i = int(i)
+            if BYTE_ID_OFFSET <= i < BYTE_ID_OFFSET + 256:
+                buf.append(i - BYTE_ID_OFFSET)
+                continue
+            if buf:
+                out.append(buf.decode("utf-8", errors="replace"))
+                buf.clear()
+            if not skip_special_tokens:
+                out.append(f"<|{i}|>")
+        if buf:
+            out.append(buf.decode("utf-8", errors="replace"))
+        return "".join(out)
+
+    def convert_tokens_to_ids(self, token):
+        return None                       # it has no special-token table at all
+
+
+def load_tokenizer(kind, model_dir, cfg):
+    """
+    (tokenizer, info) - Kimi K3's own tokenizer, or the byte fallback if asked for.
+
+    Returns the info dict verbatim into the output JSON, so the file itself says which
+    vocabulary produced it. There is no automatic fallback: with --tokenizer model a
+    tokenizer that cannot be loaded stops the run, because silently generating from byte
+    ids would produce a file that looks exactly like evidence and is not.
+    """
+    if kind == "bytes":
+        print("[tokenizer] BYTE FALLBACK (--tokenizer bytes): ids are UTF-8 bytes + 100, "
+              "not Kimi K3's vocabulary.\n"
+              "            There is no chat template. Any text decoded from these ids, and "
+              "any loss computed\n"
+              "            over them, is NOISE: this setting exercises the machinery around "
+              "the tokenizer and\n"
+              "            does not produce evidence about a model.", flush=True)
+        return ByteFallbackTokenizer(cfg.model.bos_token_id, cfg.model.eos_token_id), {
+            "kind": "bytes",
+            "name": ByteFallbackTokenizer.name,
+            "meaningful_text": False,
+            "note": ("--tokenizer bytes: UTF-8 byte b was encoded as id b + 100 "
+                     "(dataset/stream_dataset.py:136) and no chat template was applied. "
+                     "The ids mean nothing to any trained checkpoint, so every answer in "
+                     "this file is noise. It is a record that the generation loop ran, "
+                     "not a record of what a model said."),
+        }
+
     sys.path.insert(0, model_dir)                # the tokenizer ships its own module
-    from transformers import AutoTokenizer
-    return AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+    try:
+        from transformers import AutoTokenizer
+    except ImportError as exc:
+        raise SystemExit(
+            f"--tokenizer model needs the transformers package ({exc}). Install it with "
+            f"`pip install 'lazy-lora[data]'`, or pass --tokenizer bytes to smoke-test the "
+            f"generation loop with byte ids - which produces noise, not an answer.")
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+    except Exception as exc:                     # noqa: BLE001 - any load failure is fatal
+        raise SystemExit(
+            f"Kimi K3's tokenizer could not be loaded from {model_dir} "
+            f"({exc.__class__.__name__}: {exc}).\n"
+            f"That directory must hold the tokenizer files that ship with the checkpoint. "
+            f"The tiny model of scripts/make_tiny_model.py has none: for that one pass "
+            f"--tokenizer bytes, and read the answers as noise.")
+    return tokenizer, {
+        "kind": "model",
+        "name": tokenizer.__class__.__name__,
+        "meaningful_text": True,
+        "source": model_dir,
+    }
 
 
 def build_prompt_ids(tokenizer, prompt, max_len):
@@ -306,6 +449,12 @@ def main():
                     help="output JSON (default: <workspace>/demo_generate.json)")
     ap.add_argument("--adapter", default="both",
                     help="both (default) | on | off | a number scaling the LoRA delta")
+    ap.add_argument("--tokenizer", default="model", choices=("model", "bytes"),
+                    help="model (default): Kimi K3's own tokenizer from the checkpoint "
+                         "directory, the only setting that can produce a real answer. "
+                         "bytes: the dataset iterator's byte fallback, for models that "
+                         "ship no tokenizer (the tiny demo model). Everything generated "
+                         "with 'bytes' is noise and the output file says so.")
     ap.add_argument("--max-new-tokens", type=int, default=32,
                     help="tokens per answer. Each one is a full 93-layer sweep (~5 min).")
     ap.add_argument("--max-prompt-tokens", type=int, default=512,
@@ -368,6 +517,9 @@ def main():
     print(f"checkpoint : {args.checkpoint or '(none: adapter off only)'}")
     print(f"prompts    : {len(prompts)} from {args.prompts}")
     print(f"variants   : {', '.join(name for name, _ in plan)}")
+    print(f"tokenizer  : {args.tokenizer}"
+          + ("   <- byte ids, not a vocabulary: the answers will be noise"
+             if args.tokenizer == "bytes" else ""))
     print(f"decoding   : {'greedy' if args.temperature <= 0 else f'T={args.temperature} top_p={args.top_p} seed={args.seed}'}"
           f", up to {args.max_new_tokens} new tokens")
     print(f"output     : {out_path}")
@@ -385,6 +537,16 @@ def main():
             state = json.load(f)
         if [r["prompt"] for r in state["results"]] != [p["prompt"] for p in prompts]:
             raise SystemExit(f"{out_path} was made with different prompts; use a new --out")
+        # A file started with --adapter off has no checkpoint; resuming it with --adapter
+        # on or both supplies one, and the top-level record must then name it rather than
+        # say null while the file holds adapter-on answers. Two different checkpoints in
+        # one file would leave that record ambiguous, so that is refused instead.
+        if args.checkpoint and state.get("checkpoint") not in (None, args.checkpoint):
+            raise SystemExit(f"{out_path} was made with checkpoint {state['checkpoint']}; "
+                             f"continuing it with {args.checkpoint} would put two adapters "
+                             f"in one file. Use a new --out.")
+        if args.checkpoint:
+            state["checkpoint"] = args.checkpoint
         print(f"[resume] continuing {out_path}", flush=True)
     if state is None:
         state = {
@@ -406,7 +568,16 @@ def main():
 
     # ------------------------------------------------------------------- the engine
     print("\nloading the tokenizer and indexing the shards...", flush=True)
-    tokenizer = load_tokenizer(model_dir)
+    tokenizer, tok_info = load_tokenizer(args.tokenizer, model_dir, cfg)
+    # Which vocabulary produced this file is part of the file, not of the terminal it was
+    # started from, and a resumed run may not silently change it half way through.
+    previous = (state.get("tokenizer") or {}).get("kind")
+    if previous is not None and previous != tok_info["kind"]:
+        raise SystemExit(f"{out_path} was written with --tokenizer {previous}; continuing "
+                         f"it with --tokenizer {tok_info['kind']} would mix two "
+                         f"vocabularies in one file. Use a new --out.")
+    state["tokenizer"] = tok_info
+    write_state(out_path, state)
     stops = stop_token_ids(tokenizer, cfg)
     trainer = LazyLoRATrainer(cfg)
     # The routed-expert sums are cached only so the backward replay can skip a sweep
@@ -489,6 +660,10 @@ def main():
     print(f"\nwrote {out_path}")
     print(f"{done_tokens} tokens in {hms(time.time() - t_start)}"
           + (f" ({spent / done_tokens:.1f} s per token)" if done_tokens else ""))
+    if not tok_info["meaningful_text"]:
+        print("\nthe answers in that file are NOISE: --tokenizer bytes was used, so the ids "
+              "are UTF-8\nbytes rather than a vocabulary. The file records that the "
+              "generation loop ran.\nIt is not evidence about any model.")
     return 0
 
 

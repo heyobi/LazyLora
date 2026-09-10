@@ -257,8 +257,8 @@
     </div>
 
     <div class="stats">
-      <div class="stat"><b>6 sa 59 dk</b><span>adım (asıl koşu)</span></div>
-      <div class="stat"><b>4,5-4,7 GB</b><span>yerleşik bellek</span></div>
+      <div class="stat"><b>7,44 sa</b><span>adım temposu (asıl koşu)</span></div>
+      <div class="stat"><b>4,0-4,7 GB</b><span>yerleşik bellek (asıl koşu)</span></div>
       <div class="stat"><b>590 MB</b><span>eğitilen ağırlık</span></div>
       <div class="stat"><b>1,56 TB</b><span>diskteki model</span></div>
     </div>
@@ -299,8 +299,9 @@
       </div>
       <p class="caption">
         93 + 93 katman: ileri geçişte katman başına 123 saniye, geri geçişte 147 saniye (asıl
-        koşunun 1. adımında ölçüldü). Süreyi belirleyen hesap değil okuma hızı: süreç ilk
-        sekiz saatte 3,22 TB okudu, saniyede 110 MB.
+        koşunun 1. adımında ölçüldü; o adımın kendi toplamı 6 sa 59 dk, ama koşunun geneli için
+        geçerli sayı ilk üç adımda ölçülen 7,44 saatlik tempodur). Süreyi belirleyen hesap değil
+        okuma hızı: süreç ilk sekiz saatte 3,22 TB okudu, saniyede 110 MB.
       </p>
     </div>
   </section>
@@ -310,7 +311,7 @@
     <div class="scroll">
       <table>
         <thead>
-          <tr><th>Adım</th><th>Dizi</th><th>Loss</th><th>Perplexity</th><th>Bitiş</th></tr>
+          <tr><th>Adım</th><th>Dizi</th><th>Loss</th><th>Perplexity</th><th>İleri geçiş bitti</th></tr>
         </thead>
         <tbody>
           <tr><td class="num">1</td><td class="seq-a">A</td><td class="num">0,909</td><td class="num">2,48</td><td class="num">8 Eyl 12:26</td></tr>
@@ -323,10 +324,15 @@
     </div>
     <p class="caption">
       Beş Türkçe talimat örneği iki pakete sıkıştırıldı: toplam 1082 token, 528'i eğitilen cevap
-      token'ı; dizi uzunluğu sınırı 1024, lr 1e-3, warmup 2. Süreç 27 saat boyunca 4,5–4,7 GB
-      bellekte kaldı; bu bir tepe değeri değil, projede kaydedilen en yüksek değer daha eski bir
-      256 token'lık adımdaki 6,24 GB. Bu adımlar 5,6–5,8 saat sürdü; asıl koşunun dolu 1024
-      token'lık dizileri daha çok uzman okuduğu için adım başına 7 saate çıktı.
+      token'ı; dizi uzunluğu sınırı 1024, lr 1e-3, warmup 2. Son sütundaki damga, adımın
+      <em>ileri</em> geçişinin bittiği — yani loss'un yazıldığı — andır; geri geçiş o damgadan
+      sonra yaklaşık üç saat daha sürer, adım orada bitmez. İki ardışık damganın farkı yine de
+      tam bir adımdır, çünkü aynı kayma iki uçta da var: ileri bitişinden ileri bitişine. Ölçülen
+      dört aralık 5,78, 5,49, 5,77 ve 5,58 saat — yani 5,5–5,8 saat, ortalama 5,65. Süreç 27 saat
+      boyunca 4,5–4,7 GB bellekte kaldı; bu bir tepe değeri değil, projede kaydedilen en yüksek
+      değer daha eski bir 256 token'lık adımdaki 6,24 GB. Bu tempo yalnız bu koşuya ait: asıl
+      koşunun dolu 1024 token'lık dizileri daha çok uzman okuduğu için orada ilk üç adımda
+      ölçülen tempo 7,44 saat.
     </p>
   </section>
 
@@ -359,10 +365,13 @@
   <section>
     <h2>Şimdi ne dönüyor</h2>
     <p>
-      9 Eylül 12:53'te asıl koşu başladı: 400 Türkçe talimat örneği, 1024 token'lık 154 paket
-      dizi, 100 adım, lr 5e-4 kosinüs. İlk üç adımın ölçülen temposu 7,44 saat, yani yaklaşık 31 gün: 9-11 Ekim
-      civarında bitiyor. Bir systemd zamanlayıcısı 15 dakikada bir ilerlemeyi telefona gönderiyor; süreç ölürse son
-      checkpoint'ten devam ettiriyor, USB disk düşerse yeniden bağlıyor.
+      9 Eylül 12:53'te asıl koşu başladı: 400 Türkçe talimat örneği, en çok 1024 token'lık 154
+      paket dizi, 100 adım, lr 5e-4 kosinüs. İlk üç adımın ölçülen temposu 7,44 saat (aralıklar
+      7,26 ve 7,62 saat; bu iki aralık koşmakta olan kayıttan okundu — depodaki
+      <code>evidence/</code> anlık görüntüsü asıl koşunun 1. adımında bitiyor), yani yaklaşık
+      31 gün: 9-11 Ekim civarında tamamlanıyor. Bir systemd zamanlayıcısı 15 dakikada bir
+      ilerlemeyi telefona gönderiyor; süreç ölürse son checkpoint'ten devam ettiriyor, USB disk
+      düşerse yeniden bağlıyor.
     </p>
     <p>
       Yol boyunca çıkan yönlendirme ölçümleri ayrı bir hikâye: uzman seçimi dilden çok alana

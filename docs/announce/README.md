@@ -23,7 +23,14 @@ a defect, and it is reportable as one.
 | [`reddit_localllama.md`](reddit_localllama.md) | r/LocalLLaMA | EN | Written 9 Sep 2026, revised 10 Sep. **Not posted.** |
 | [`x_thread.md`](x_thread.md) | X, eleven posts | EN | Written 9 Sep 2026, revised 10 Sep. **Not posted.** |
 | [`linkedin.md`](linkedin.md) | LinkedIn, long form and short | TR + EN | Written 8 Sep 2026, revised 10 Sep. **Not posted.** |
-| *(not in this repository)* | Letter to the author of `kimi-k3-in-c` | EN | A letter to a named person, kept out of the tree. Publishing a letter before its recipient has read it makes it an announcement rather than a letter, and this one thanks him for work that caught a real bug in mine. |
+| *(not in this repository)* | Letter to the author of `kimi-k3-in-c` | EN | **Sent by email on 10 September 2026** — the first of these to go anywhere. Kept out of the tree then and now: publishing a letter before its recipient has read it makes it an announcement rather than a letter, and this one thanks him for work that caught a real bug in mine. No reply is owed and none is assumed; if one comes, what it corrects goes into the repository, not into a post. |
+
+**The repository itself became public on 10 September 2026**, at
+<https://github.com/heyobi/LazyLora>, with GitHub Pages serving `docs/` — so the Turkish
+walkthrough is live at <https://heyobi.github.io/LazyLora/kanit_kosusu.html> and every link
+in these drafts now resolves for a stranger. That is the whole of what has happened. Going
+public is not an announcement: the four drafts above are still unposted, and nothing in this
+directory has been sent to Show HN, r/LocalLLaMA, X or LinkedIn.
 
 When one goes out, its row gets the date and the link to the live post, and the draft here
 stays as it was written so the two can be compared.

@@ -9,15 +9,24 @@ Package expert-routing trace directories into a release folder.
     python scripts/export_traces.py ~/work/traces ./release --keep-text-for tr_paragraph,code_python
 
 ---------------------------------------------------------------------------------------
-!! WRITTEN WITHOUT BEING EXECUTED !!
-Written while the machine was busy with the 100-step training run, so it has never been
-run and no trace has been exported with it. The five traces in evidence/traces/ were not
-exported with this script: all five of their texts were written for this project, so
+RUN ON EVERY PUSH; NO PUBLISHED RELEASE HAS BEEN MADE WITH IT YET
+Written while the machine was busy with the 100-step training run, so it was committed
+unexecuted. It is now run on every push by .github/workflows/tools.yml, against the five
+committed traces in evidence/traces/, into a throwaway directory: the job validates all
+five, checks that MANIFEST.json carries a sha256 for every exported file, that
+`sha256sum -c CHECKSUMS.sha256` passes, that the text and token ids were withheld from the
+exported manifests unless --keep-text-for named them, and that every file under
+evidence/traces/ has the same sha256 after the run as before it, which is what "it never
+writes to <source_dir>" means. If that job is green, this file has run.
+
+What has still never happened is a real release. The five traces in evidence/traces/ were
+not exported with this script: all five of their texts were written for this project, so
 nothing had to be withheld and the directories were copied in whole, with only the local
 model path replaced. Use this script when you trace a text you do not own - and then run
 it on a copy first and read the withheld-text fields of every output trace.json by hand,
 because it is the only thing standing between someone else's paragraph and a public
-dataset.
+dataset, and a green continuous-integration job on texts that needed no withholding is not
+the same as having checked yours.
 ---------------------------------------------------------------------------------------
 
 What it does, in order, for every trace directory found under <source_dir>:

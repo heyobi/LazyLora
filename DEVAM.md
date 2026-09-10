@@ -2,106 +2,71 @@
 
 ## ŞU AN (10 Eylül 2026, güncel tutulur)
 
-**Durum:** Motor uçtan uca çalışıyor ve doğrulanmış: ileri geçiş 93 katmanda C referansıyla
-eşleşiyor (§13, Bulgular §17.1 — 93 satırın hepsi kosinüs 0.9857 ve üzeri; en düşük satır
-0.985744 katman 71, en kötü kuşak 68-72, çıkış katmanı 0.999840), geri geçiş dört katmanda
-sonlu farkla doğrulandı (§11; en kötü bağıl hata 9.1e-3, katman 1). **Eğitim döngüsü
-kanıtlandı** (Bulgular §18): 5 örneklik kanıt koşusunda aynı dizinin loss'u tur tur düştü
-(A: 0.909 → 0.500 → 0.157, B: 0.521 → 0.193). Bu ezberdir; ileri → geri → AdamW →
-checkpoint döngüsünün doğruluğunu kanıtlar, genellemeyi değil. Kanıt koşusunun adımı
-5.5-5.8 saatti ama iki paket dizisi ~541'er token'lıktı; asıl koşunun tam 1024'lük dizisiyle
-karıştırılmamalı. Beş metinlik yönlendirme ölçümü bitti (Bulgular §16-17) ve **izler artık
-depoda** (aşağıda). Taban değerlendirmesi ve eşik sabit (§16.1). Hedef: Türkçe konuşan Kimi.
+**Depo 10 Eylül 2026'da herkese açıldı:** <https://github.com/heyobi/LazyLora>. GitHub Pages
+`docs/`'u yayınlıyor, Türkçe kanıt koşusu sayfası canlı
+(<https://heyobi.github.io/LazyLora/kanit_kosusu.html>) ve README oraya bağlanıyor; eskiden
+oradaki, yalnızca tek bir hesapta açılan `claude.ai` bağlantısı ağaçtan kalktı. Referans
+motorun (`kimi-k3-in-c`) yazarına yazılan mektup aynı gün **e-postayla gönderildi**; mektup
+bilerek depoda değil, gerekçesi `docs/announce/README.md`'de. **Hiçbir yere hiçbir şey
+paylaşılmadı:** `docs/announce/` altındaki dört taslak (Show HN, r/LocalLLaMA, X, LinkedIn)
+yazıldı, hiçbiri yayınlanmadı.
 
-**Kanıt paketi depoda: `evidence/`** (6.2 MB, 25 dosya + `SHA256SUMS`; Bulgular §19). 9
-Eylül'de kondu. İçindekiler:
-- `evidence/traces/` — beş yönlendirme izi (`zh_paragraph`, `en_paragraph`, `tr_paragraph`,
-  `tr_news`, `code_python`), 92 MoE katmanının tamamı, her biri `trace.bin` + `trace.json` +
-  `analysis.json` + `analysis.md`; toplam 5.669.776 bayt yönlendirme kaydı.
-- `evidence/cmp93_en34_2026-09-06.log` — 93 katmanlık C karşılaştırması (98 satır, toplam
-  2869 s, 426.59 GB okuma).
-- `evidence/forward_loss_main.jsonl`, `forward_loss_proof.jsonl` — adım başına ham loss ve
-  Unix zaman damgası; belgelerdeki bütün adım süreleri bunlardan türer.
-- `evidence/run_manifest.json` — koşan işin manifesti, yollar yer tutucu.
+**Koşan iş — asıl koşu, 9 Eylül 12:53 başladı:** `datasets/dolly_tr_400.jsonl` (400 Dolly-tr
+örneği → 154 paket dizi ≤1024 token), 100 adım (0.65 epoch), lr 5e-4 tepe, warmup 5,
+kosinüs, istem maskeli, her 5 adımda checkpoint
+(`/mnt/nvme/lazylora/checkpoints/lazy_lora_step_NNNNN.pt`, son 3 tutulur). **Şu an adım
+3/100.** Ölçülen tempo **7,44 sa/adım** (ilk üç adımın aralıkları 7,26 ve 7,62 sa), yani
+~31 gün; bitiş **9-11 Ekim 2026**. RSS 4,0-4,7 GB, takas da kullanımda. Bekçi
+(`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da bir telefona ilerleme
+gönderir, süreç ölürse checkpoint'ten devam ettirir, USB disk düşerse yeniden bağlar.
 
-Önemi: ölçüm notundaki **her yönlendirme tablosu** artık okuyanın kendi dizüstünde
-yeniden hesaplanabilir — `scripts/analyze_trace.py <iz_dizini>`, checkpoint yok, GPU yok,
-saniyeler. Beş metnin beşi de bu çalışma için yazıldı (haber üslubundaki Türkçe paragraf
-fındık üretimi üzerinedir, hiçbir yayından alınmadı), o yüzden manifestlerde metin ve token
-id'leri açık duruyor. **Depoda olmayan, açıkça öyle yazılan:** 1.56 TB checkpoint, C
-motorunun katman katman dökümü, paketlenmiş NVMe gövdesi, 1.8 GB'lık eğitim
-checkpoint'leri, sonlu fark logu (harness terminale yazıyor; §11'deki rakamlar oradan) ve
-`profile_{128,512,1024}` yardımcı izleri.
+**Bitmiş olan:** motor uçtan uca doğrulanmış — ileri geçiş 93 katmanda C referansıyla
+eşleşiyor (bütün satırlar kosinüs ≥ 0.9857; en düşüğü 0.985744, katman 71; §13, Bulgular
+§17.1), geri geçiş dört katmanda sonlu farkla doğrulandı (§11; en kötü bağıl hata 9.1e-3,
+katman 1), eğitim döngüsü kanıt koşusunda kanıtlandı (Bulgular §18 — bu ezberdir, genelleme
+değil). Kanıt paketi depoda: `evidence/` (6.2 MB, 25 dosya + `SHA256SUMS`; Bulgular §19),
+yönlendirme tablolarının hepsi `scripts/analyze_trace.py` ile okuyanın kendi makinesinde
+yeniden hesaplanabilir. Değerlendirme eşiği eğitimden **önce** sabitlendi (§16.1, commit
+`6605306`, açıklamalı etiket `preregistration-2026-09-08`) — iki zaman damgası ama tek
+makine, tek operatör; bağımsız tanık değildir ve belgelerde böyle yazılıdır. Adaptörün
+şekli (bir yerde yazılı kalsın): katman başına **tek** rank-16 adaptör, o katmanın **896
+uzmanının tamamı** tarafından paylaşılır, MoE gizli uzayında (3584 → 3072 → 3584) —
+`lazy_lora/trainer/lazy_trainer.py:130`; uzman başına değildir, öyle olsa ~2.6 × 10¹⁰
+eğitilebilir parametre ederdi.
 
-**Koşan iş:** asıl koşu (`LazyLora_Workspace/run_main.sh`, 9 Eylül 12:53):
-`datasets/dolly_tr_400.jsonl` (400 Dolly-tr örneği → 154 paket dizi ≤1024 token, 78k
-eğitilen token), 100 adım (0.65 epoch), lr 5e-4 tepe (kanıt koşusu 1e-3'te kararlıydı),
-warmup 5, kosinüs, istem maskeli, her 5 adımda checkpoint
-(`/mnt/nvme/lazylora/checkpoints/lazy_lora_step_NNNNN.pt`, son 3 tutulur).
+**Sürekli entegrasyon:** `.github/workflows/quickstart.yml` her push'ta
+`scripts/quickstart.sh --fast` koşuyor — sentetik Kimi-K3 biçimli tiny checkpoint, shard
+bütünlüğü, gerçek ileri geçiş, on gerçek eğitim adımı + checkpoint/geri yükleme, sonlu fark
+kontrolü, yerel MXFP4 çekirdeği ile referans çözücünün karşılaştırması ve
+`tests/fixtures/ops/`'taki sekiz op fixture'ı — hepsi geçiyor. `.github/workflows/tools.yml`
+ise bu makinenin bir ay daha koşturamayacağı üç aracı GitHub koşucusunda çalıştırıyor:
+`scripts/demo_generate.py` (adaptör açık/kapalı yan yana üretim — bitmiş koşunun
+önce/sonra kanıtı), `scripts/export_traces.py` ve `scripts/eval_perplexity.py`. Üçü de bugüne kadar
+**hiçbir yerde koşmamıştı**; en kritiği `eval_perplexity.py`, çünkü 9 Ekim'de
+orada kırılan bir şey günlere mal olur.
 
-**Ölçülen adım (adım 1, 9 Eylül):** **6 sa 59 dk 41 sn** — ileri 3 sa 11 dk 34 sn
-(123.6 s/katman, 93 katman), geri 3 sa 48 dk 07 sn (147.2 s/katman). Bu hızla 100 adım
-≈ **31 gün** (ilk üç adımın ölçülen temposu 7,44 sa: aralıklar 7,26 ve 7,62 sa),
-bitiş **~9-11 Ekim 2026**; canlı rakam
-`LazyLora_Workspace/run_manifest.json`'da. **Okuma hızı üç ayrı sayıdır, karıştırma:**
-(i) 110 MB/s **toplam**, tek ölçülen uçtan uca rakam — 8 sa 06 dk 57 sn'de
-3.219.659.335.955 bayt (`/proc` okuma sayacı), USB diskteki uzmanlar ile NVMe gövdesi
-birlikte; (ii) 61 MB/s tek katman süpürmesi içindeki **etkin** hız (14.5 GB / 238 s,
-Bulgular §16.5); (iii) 115 MB/s USB kutusunun **kendi sıralı testi** — cihazın özelliği,
-motorun ölçümü değil. RSS 4.0-4.7 GB, takas da kullanımda; bu motorun gördüğü en yüksek
-RSS 6.24 GB'dır ve daha eski bir 256 token'lık adımda ölçüldü (§17). Bekçi
-(`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da bir telefona
-ilerleme/uyarı gönderir, ölürse checkpoint'ten devam ettirir, USB disk düşerse yeniden
-bağlar. Kanıt koşusunun checkpoint'leri `checkpoints/proof_dolly5/`, loss'ları
-`forward_loss.jsonl.proof`.
-
-**Determinizm kontrolü teyit edildi:** asıl koşunun 1. adım loss'u kanıt koşusununkini altı
-ondalıkla yeniden üretti (0.909084). Doğrulama yöntemi: `dolly_tr_400.jsonl` ile
-`dolly_tr_proof.jsonl` ayrı ayrı ayrıştırılıp ilk beş kayıt karşılaştırıldı — birebir eşit;
-`scripts/build_train_set.py` kanıt dosyasını aynı seçimin `picked[:5]`'i olarak yazıyor
-(satır 80-82). İki koşu da sıfır ilklendirilmiş adaptörle başladığı için aynı sayıyı vermek
-zorundaydı (Bulgular §18.1).
-
-**Adaptörün şekli (bir yerde yazılı olsun):** yönlendirilen uzmanların LoRA'sı katman başına
-**tek** rank-16 adaptördür ve o katmanın **896 uzmanının tamamı** tarafından paylaşılır, MoE
-gizli uzayında (3584 → 3072 → 3584) — `lazy_lora/trainer/lazy_trainer.py:130`. Uzman başına
-adaptör değildir; öyle olsa ~2.6 × 10¹⁰ eğitilebilir parametre ederdi. Ablasyon gelecek iş
-(ölçüm notu §11, Bulgular §19.1).
-
-**Açık kaynak paketi yazıldı, quickstart HİÇ KOŞTURULMADI:** `LICENSE`, `NOTICE`,
-`docs/LICENSES.md`, `docs/QUICKSTART.md`, `scripts/quickstart.sh`,
-`scripts/make_tiny_model.py`, `docs/announce/`, `docs/measurement_note.md` (v1.2),
-`docs/traces/README.md`, `CITATION.cff`, `CONTRIBUTING.md`,
-`.github/workflows/quickstart.yml`, `pyproject.toml` ve `evidence/` depoda.
-**`scripts/quickstart.sh` bir kez bile koşturulmadı**: `docs/QUICKSTART.md`'deki her süre,
-bellek ve beklenen çıktı rakamı koddan okunarak yazıldı, ölçüm değil (makine dolu).
-Makine boşaldığında ilk iş budur: koştur, gerçek rakamlarla QUICKSTART'ı düzelt.
-`scripts/export_traces.py` de hiç koşturulmadı ve artık gerekmiyor: izler, yalnızca bu
-makinenin dosya yolları yer tutucuyla değiştirilerek `evidence/traces/`'e kondu. O dosyanın
-başındaki "telifli haber metni" uyarısı beş metnin gerçek kaynağı bilinmeden yazılmıştı
-ve yanlıştır.
-
-**Sıradaki iş — checkpoint gerektirmeyenler** (koşan eğitime dokunmadan yapılabilir):
+**Sıradaki gerçek karar noktası değerlendirmedir.** Ondan önce yapılması gereken büyük bir iş
+yok; kalan küçük açık işler:
 1. Ölçüm notundaki † işaretli iki rakamı (katman 1-8 dil imzası sınırı; eşit uzunlukta
    yoğunlaşma kontrolü) `evidence/traces/` üzerinde `scripts/analyze_trace.py --prefix` ile
-   yeniden hesaplayıp sonucu Bulgular'a yaz, işareti kaldır. Checkpoint gerekmez, saniyeler
-   sürer — ama yine de python çalıştırır, makine boşken yap.
-2. `scripts/export_traces.py` başlığındaki yanlış telif uyarısını düzelt.
-3. Ön-kayıt commit'ine (`6605306`, 8 Eylül 07:54:49) açıklamalı git etiketi koy. GitHub'da
-   ikinci bir zaman damgası verir; **bağımsız bir damga değildir** — eşiklerin tarihi hâlâ
-   bu makinenin saatine ve depo commit tarihlerine dayanır ve belgelerde zayıflık olarak
-   böyle yazılmalıdır.
-4. `Bulgular.md` içindekiler listesi 8. bölümde kalmış; 9-19 eklenmeli.
+   yeniden hesapla, sonucu Bulgular'a yaz, işareti kaldır. Python çalıştırır — makine boşken.
+2. `Bulgular.md` içindekiler listesi 19'da bitiyor; §20 (motorun yabancı bir makinedeki ilk
+   koşusu) eklenmeli.
+3. `.github/workflows/quickstart.yml`'in baştaki yorumu hâlâ kendisini "hiç koşmadı" diye
+   tanıtıyor ve 1. adımın SKIP vereceğini söylüyor; ikisi de artık yanlış — fixture'lar
+   10 Eylül'de `tests/fixtures/ops/`'a kondu ve 1. adım geçiyor. Ağaçta eski düzeni anlatan
+   son yer orası: `grep -n SKIP .github/workflows/quickstart.yml`.
 
 **Nasıl bakılır:** `bash scripts/status.sh` · `cat LazyLora_Workspace/status.txt` ·
 `tail LazyLora_Workspace/forward_loss.jsonl` (adım başına loss; not: loss ileri geçiş
-sonunda yazılır, adımın geri geçişi 3 sa 48 dk daha sürer) ·
+sonunda yazılır, adımın geri geçişi 3 sa 48 dk daha sürer; dosyada koşu alanı yok, mock
+satırları da aynı dosyada) ·
 `tr '\r' '\n' < LazyLora_Workspace/main_run_2026-09-09.raw | tail`.
 
 **Bittiğinde ne yapılacak:** `eval_perplexity.py --corpus tr_news,tr_wiki,en_wiki
 --checkpoint /mnt/nvme/lazylora/checkpoints/lazy_lora_step_00100.pt` ile eşiği (§16.1:
-haber bpb 0.455 → ≤0.441, EN wiki ≤0.198) sına; sonucu olumlu/olumsuz olduğu gibi
-Bulgular'a ve README'ye yaz. Ara kontrol: adım 50 checkpoint'inde yalnız `tr_news`
+haber bpb 0.455 → ≤0.441, EN wiki ≤0.198) sına; sonucu olumlu da olsa olumsuz da olsa olduğu
+gibi Bulgular'a ve README'ye yaz. Ara kontrol: adım 50 checkpoint'inde yalnız `tr_news`
 (≈3 saat) koşulabilir. Loss eğrisi yükseliyorsa (batch 1 olduğu için adım adım gürültülü;
 10 adımlık ortalamaya bak) lr'ı düşürüp `--resume` ile devam et.
 

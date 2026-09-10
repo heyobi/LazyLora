@@ -1,15 +1,25 @@
 # Quickstart: run the engine yourself
 
-> **This document describes scripts that have not been run yet.** `scripts/quickstart.sh`,
-> `scripts/make_tiny_model.py`, `scripts/demo_generate.py` and `scripts/export_traces.py`
+> **Every script this document describes was written before anything could run it.**
+> `scripts/quickstart.sh`, `scripts/make_tiny_model.py`, `scripts/demo_generate.py`,
+> `scripts/export_traces.py` and `scripts/eval_perplexity.py`
 > were written by reading the engine, line by line, while the machine that could have run
-> them was busy with a 29-day training job. **Every runtime, every memory figure and every
+> them was busy with a 31-day training job. **Every runtime, every memory figure and every
 > expected output in Part 1 below is derived from the code, not measured** — including the
 > per-step times in the table, the peak resident set, and the byte counts in "Roughly what
-> you should see". The first person to run `scripts/quickstart.sh` on a free machine is
-> validating it; `.github/workflows/quickstart.yml` does that on a public runner, and its
-> first green run is the first evidence any of this works. Please report whatever it gets
-> wrong.
+> you should see". `.github/workflows/quickstart.yml` runs it on every push on a public
+> runner, and it has run: the first run failed on the finite-difference check, which is
+> written up in `Bulgular.md` §20. The badge, not this paragraph, is the current claim.
+> What is still unmeasured is every runtime on the author's own hardware. Please report
+> whatever it gets wrong on yours.
+>
+> The last three of those are a step further on. `.github/workflows/tools.yml` runs
+> `demo_generate.py`, `export_traces.py` and `eval_perplexity.py` on every push and then
+> asserts what they produced: the first two against the tiny synthetic model and the five
+> committed routing traces, the third against a corpus the job writes itself. If that job
+> is green, all three have executed. **None of the three has ever been pointed at the real
+> checkpoint**, and neither of the two that need a tokenizer has ever had one — the
+> sections below say what that leaves unknown.
 >
 > Part 2 is different: those numbers come from the main run on the author's machine and are
 > measured. Each one says which run it came from.
@@ -382,8 +392,10 @@ python scripts/demo_generate.py --checkpoint <lazy_lora_step_00100.pt> \
 ```
 
 Drop `--dry-run` when the estimate it prints is one you are willing to pay (estimated from
-the per-sweep read volume; no generation has been run on this engine yet, so there is no
-measured cost per token). There is no KV cache: every generated token is a full 93-layer
+the per-sweep read volume; no generation has been run against the real checkpoint yet, so
+there is no measured cost per token — the continuous-integration run described below
+generates against an 8 MB synthetic model in milliseconds, which says nothing about a sweep
+over 1.56 TB). There is no KV cache: every generated token is a full 93-layer
 sweep, which reads the top-16 routed experts of each of the 92 MoE layers off the USB disk
 — 16 × 17.5 MB × 92, about 26 GB — plus the 108.8 GB packed trunk off the NVMe. At the
 110 MB/s aggregate and 61 MB/s per-sweep rates measured during training, the expert reads
@@ -398,6 +410,29 @@ under `nohup` or systemd.
 trainer with `B = 0` computes the base model exactly. The output file carries both answers
 per prompt, side by side, with the prompt built through the model's own chat template —
 the same generation prompt the training data path masks the loss up to.
+
+**The script runs; it has never generated a token from Kimi K3.**
+`.github/workflows/tools.yml` exercises it on every push against the tiny synthetic model:
+two prompts, four tokens per answer, the adapter off, and then — resuming the same output
+file in a second process — the adapter on. The job asserts that the file exists, is valid
+JSON, holds both prompts, records the adapter-off and adapter-on answers separately with
+the checkpoint each one used, and that the answers the first process wrote came back
+unchanged in the second, which is what the per-token flush to disk is for. So the
+generation loop, the prompt build, the sampler, the incremental write and the adapter
+toggle have all executed. The 1.56 TB checkpoint is a different matter: the run frees the
+machine around 9–11 October 2026, and this is the first thing that will be done with it.
+
+That continuous-integration run has no tokenizer, and cannot have one: Kimi K3's ships
+beside the 1.56 TB checkpoint, it is not in this repository and not on a runner, and the
+tiny model's vocabulary is 2048 synthetic entries. It therefore passes `--tokenizer bytes`,
+which selects the dataset iterator's byte fallback — UTF-8 byte *b* becomes id *b* + 100
+(`dataset/stream_dataset.py:136`) — and renders the prompt as a plain transcript rather
+than through a chat template. That exercises every line around the tokenizer and makes the
+answers noise by construction, so the output file records `"tokenizer": {"kind": "bytes",
+"meaningful_text": false}` and the job asserts that stamp is there. `--tokenizer model` is
+the default and the only setting that can produce an answer worth reading; under it a
+tokenizer that will not load stops the run, because a quiet fall back to byte ids would
+produce a file that looks exactly like evidence and is not.
 
 ### 6. The evaluation — hours per chunk
 
@@ -417,15 +452,34 @@ controls (0.311 and 0.194; English must not degrade past 0.198).
 in this repository says the evaluation succeeded, or that Turkish improved, because it has
 not been run. A negative result will be reported as a negative result.
 
+**The harness itself does run.** If `eval_perplexity.py` were broken it would not be
+discovered until the day the number is wanted, so `.github/workflows/tools.yml` puts it
+through a complete evaluation on every push: against the tiny synthetic model, over a short
+corpus the job writes itself (`--text`), through `--arch-json` so it sweeps the tiny model's
+four layers rather than Kimi K3's ninety-three, once on the base model and once with a LoRA
+checkpoint loaded. The job then asserts that every chunk produced a finite bits-per-byte, a
+loss at the uniform prior where the model is untrained, and a complete record appended to
+`results.jsonl`. That is the chunking, the sweep, the loss, the bits-per-byte arithmetic and
+the results file, all exercised a month before they are needed.
+
+It is not a measurement of anything and cannot be. The weights are eight megabytes of noise
+and, with no tokenizer available, the run passes `--tokenizer bytes` and the ids are UTF-8
+bytes rather than a vocabulary — so every record it writes carries `"tokenizer":
+"byte-fallback"` and `"meaningful": false`, the script prints each line prefixed
+`[NOT A MEASUREMENT]`, and the pre-registered protocol reads only records with
+`"meaningful": true`. The thresholds quoted above will be decided by records written with
+`--tokenizer model` against the real checkpoint, and no such record exists yet.
+
 ---
 
 ## What none of this shows
 
 Part 1 shows that the mechanism works and that its gradients are real. It says nothing
-about Kimi K3, because the weights are eight megabytes of deterministic noise. It also has
-not been run yet: until `.github/workflows/quickstart.yml` is green, or somebody runs
-`scripts/quickstart.sh` on a free machine, Part 1 is a claim about code that has been read
-rather than a claim about code that has run.
+about Kimi K3, because the weights are eight megabytes of deterministic noise. Part 1 has
+run: `.github/workflows/quickstart.yml` executes it on every push, and its first run is
+written up in `Bulgular.md` §20, including the check that failed. What that establishes is
+that the code path and the gradient check work on a toy model it generates itself; the
+timings and memory figures on the author's hardware remain derived, not measured.
 
 The evidence bundle shows a third thing and only that: what the runs actually printed. It
 lets a reader check the numbers quoted here against the files they were read off, and

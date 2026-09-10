@@ -1,0 +1,495 @@
+# The three scripts that have never run anywhere.
+#
+# scripts/quickstart.sh exercises the engine. It does not touch demo_generate.py,
+# export_traces.py or eval_perplexity.py, and those three were written the same way the
+# quickstart was - by reading the engine while the author's machine was busy with a 31-day
+# training run - so until this file existed they had never been executed by anything. Two
+# of them matter a great deal: demo_generate.py produces the single before/after artefact
+# the whole launch rests on, and eval_perplexity.py is the harness that decides whether the
+# threshold pre-registered in commit 6605306 was met. If eval_perplexity.py breaks on the
+# day the run finishes, it costs days. GitHub's machines can find that out now.
+#
+# What this job proves, and what it deliberately does not:
+#
+#   * it runs all three against a tiny synthetic Kimi-K3-shaped checkpoint (8 MB of
+#     deterministic noise, scripts/make_tiny_model.py) and against the five committed
+#     routing traces. The mechanisms are real: the real streaming loader, the real
+#     forward sweep, the real LoRA checkpoint format, the real trace reader;
+#
+#   * it says nothing about Kimi K3. In particular, neither demo_generate.py nor
+#     eval_perplexity.py has a tokenizer here: Kimi K3's ships with the 1.56 TB
+#     checkpoint, it is not in this repository and it is not on a runner, and the tiny
+#     model's vocabulary is 2048 synthetic entries. Both steps therefore pass
+#     --tokenizer bytes, which selects the dataset iterator's byte fallback (UTF-8 byte b
+#     becomes id b + 100, dataset/stream_dataset.py:136). That exercises every line around
+#     the tokenizer while making the ids meaningless by construction, so the generated
+#     text is noise and the loss is a number about nothing. Both scripts stamp their
+#     output accordingly ("meaningful_text": false / "meaningful": false) and this job
+#     asserts that stamp is there. No number printed by this workflow is a measurement of
+#     anything, and the step names say so.
+#
+# The first green run of this file is the first time any of the three has executed.
+
+name: tools
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tools:
+    name: demo_generate, export_traces, eval_perplexity (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    # Literal paths, not ${{ runner.temp }}: the runner context is not available in a
+    # job-level env block. Everything this job writes goes under TOOLS_DIR, outside the
+    # checkout, so the evidence/ tree it later proves untouched stays untouched.
+    env:
+      TOOLS_DIR: /tmp/lazylora-tools
+      LAZYLORA_MODEL_DIR: /tmp/lazylora-tools/model
+      LAZYLORA_WORKSPACE_DIR: /tmp/lazylora-tools/workspace
+      LAZYLORA_FAST_SCRATCH_DIR: /tmp/lazylora-tools/scratch
+      LAZYLORA_TRUNK_DIR: ""            # no NVMe trunk overlay (mmap_loader.py:147-149)
+      PYTHONUNBUFFERED: "1"
+      DEMO_OUT: /tmp/lazylora-tools/demo_generate.json
+      DEMO_OFF_SNAPSHOT: /tmp/lazylora-tools/demo_generate.after_adapter_off.json
+      MAX_NEW_TOKENS: "4"
+      TRAIN_STEPS: "4"
+      EVAL_CHUNK: "64"
+      EVAL_CHUNKS: "2"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The CPU wheel index: the GPU build is ~2.5 GB and nothing here needs CUDA.
+      # transformers is deliberately NOT installed. It is an optional dependency
+      # (pyproject.toml [data]) and it would be useless without Kimi K3's tokenizer files,
+      # so leaving it out also proves the two scripts fail cleanly rather than obscurely
+      # when it is absent and --tokenizer model is asked for.
+      - name: Install torch (CPU) and lazy_lora
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.3'
+          python -m pip install -e .
+          python -c "import lazy_lora, numpy, torch; print(numpy.__version__, torch.__version__)"
+          mkdir -p "$TOOLS_DIR" "$LAZYLORA_MODEL_DIR" "$LAZYLORA_WORKSPACE_DIR" "$LAZYLORA_FAST_SCRATCH_DIR"
+
+      # Everything downstream needs a real LoRA checkpoint file, in the real format, with
+      # a non-zero B matrix - otherwise "adapter on" and "adapter off" would compute the
+      # same thing and the toggle in step 3 would prove nothing. LoRA rank and alpha are
+      # left at the config defaults (r=16, alpha=32) on purpose: demo_generate.py and
+      # eval_perplexity.py build their own trainers from the default config, and a
+      # checkpoint written at some other rank would not load into them.
+      - name: Build the tiny Kimi-K3-shaped checkpoint and train a real LoRA adapter into it
+        run: |
+          set -euo pipefail
+          python scripts/make_tiny_model.py "$LAZYLORA_MODEL_DIR" --seed 0
+          python scripts/check_shards.py --model-dir "$LAZYLORA_MODEL_DIR"
+          python - <<'PY'
+          import math, os, sys
+          repo = os.getcwd()
+          sys.path.insert(0, repo)
+          sys.path.insert(0, os.path.join(repo, "scripts"))
+          assert os.environ.get("LAZYLORA_ALLOW_SYNTHETIC") != "1", "the synthetic gate must be closed"
+
+          import torch
+          from make_tiny_model import load_tiny_config
+          from lazy_lora.trainer.lazy_trainer import LazyLoRATrainer
+
+          STEPS = int(os.environ["TRAIN_STEPS"])
+          N = 64
+          torch.manual_seed(0)
+
+          cfg, _ = load_tiny_config(os.environ["LAZYLORA_MODEL_DIR"])
+          cfg.training.max_seq_len = N
+          cfg.training.max_steps = STEPS
+          cfg.training.warmup_steps = 1
+          cfg.training.learning_rate = 5e-3      # the default 2e-4 over 4 steps barely moves B
+          cfg.training.min_learning_rate = 5e-4
+          cfg.training.logging_steps = 10 ** 6   # the live dashboard belongs to the real run
+
+          V = cfg.model.vocab_size
+          seq = (torch.arange(N + 1, dtype=torch.long) * 37 + 11) % (V - 8) + 3
+          inp, tgt = seq[:-1].unsqueeze(0), seq[1:].unsqueeze(0)
+
+          trainer = LazyLoRATrainer(cfg)
+          losses = [trainer.train_step(step=s, input_ids=inp, target_ids=tgt)
+                    for s in range(1, STEPS + 1)]
+          moved = max(float(mod.lora_B.detach().abs().max())
+                      for bundle in trainer.lora_layers for _n, mod in bundle.all_modules())
+          ckpt = trainer.save_lora_checkpoint(step=STEPS, data_cursor=0)
+          trainer.close()
+
+          print(f"losses {losses[0]:.4f} -> {losses[-1]:.4f}")
+          print(f"largest |lora_B| after {STEPS} steps: {moved:.3e} (exactly 0 at init)")
+          print(f"checkpoint {ckpt}  {os.path.getsize(ckpt) / 1e6:.2f} MB")
+
+          assert all(math.isfinite(x) for x in losses), losses
+          assert moved > 0.0, ("lora_B is still zero: with B = 0 the adapter contributes "
+                               "nothing and the on/off toggle downstream would be untestable")
+          assert os.path.isfile(ckpt), ckpt
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"LORA_CKPT={ckpt}\n")
+          PY
+
+      # Two passes over the same output file, on purpose.
+      #
+      # Pass 1 writes only the adapter-off answers. Pass 2 --resume's that file with
+      # --adapter both: the base answers are already done, so it skips them and generates
+      # only the adapter-on ones into the same file. That is the only way to prove from
+      # the outside that the per-token write to disk really happens - a file left by one
+      # process is picked up complete and correct by another - and it exercises the skip
+      # path, the resume path and both sides of the adapter toggle.
+      #
+      # --tokenizer bytes: see the header. The answers are noise; the point is that the
+      # loop, the prompt build, the sampler, the flush and the toggle all execute.
+      - name: "demo_generate: generate with the adapter off, then resume with it on (byte ids: exercises the loop, the answers are noise)"
+        run: |
+          set -euo pipefail
+          cat > "$TOOLS_DIR/prompts.jsonl" <<'JSONL'
+          {"instruction": "Bir artı bir kaç eder?"}
+          {"instruction": "Bu cümleyi tek kelimeyle özetle.", "input": "Kedi damın üstüne çıktı."}
+          JSONL
+
+          python scripts/demo_generate.py \
+            --arch-json "$LAZYLORA_MODEL_DIR/config.json" \
+            --tokenizer bytes \
+            --prompts "$TOOLS_DIR/prompts.jsonl" \
+            --adapter off \
+            --max-new-tokens "$MAX_NEW_TOKENS" \
+            --minutes-per-token 0 \
+            --out "$DEMO_OUT"
+
+          cp "$DEMO_OUT" "$DEMO_OFF_SNAPSHOT"
+
+          python scripts/demo_generate.py \
+            --arch-json "$LAZYLORA_MODEL_DIR/config.json" \
+            --tokenizer bytes \
+            --prompts "$TOOLS_DIR/prompts.jsonl" \
+            --checkpoint "$LORA_CKPT" \
+            --adapter both \
+            --max-new-tokens "$MAX_NEW_TOKENS" \
+            --minutes-per-token 0 \
+            --resume \
+            --out "$DEMO_OUT"
+
+      - name: "Assert: valid JSON, both prompts, adapter-off and adapter-on answers side by side, and the first pass's tokens survived the second"
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, os
+
+          out = os.environ["DEMO_OUT"]
+          budget = int(os.environ["MAX_NEW_TOKENS"])
+          steps = int(os.environ["TRAIN_STEPS"])
+          ckpt = os.environ["LORA_CKPT"]
+
+          assert os.path.isfile(out), f"{out} was not written"
+          with open(out, encoding="utf-8") as f:
+              state = json.load(f)                       # valid JSON, or this raises
+          with open(os.environ["DEMO_OFF_SNAPSHOT"], encoding="utf-8") as f:
+              after_off = json.load(f)
+
+          # Nothing here may be mistaken for a model's answer.
+          assert state["tokenizer"]["kind"] == "bytes", state["tokenizer"]
+          assert state["tokenizer"]["meaningful_text"] is False, state["tokenizer"]
+          assert state["commit"], "the git provenance stamp is empty"
+          assert state["layers"] == 4, state["layers"]
+          assert state["checkpoint"] == ckpt, (state["checkpoint"], ckpt)
+
+          # Both prompts are there, and the second one is the instruction and the input
+          # joined the way the training data path joins them (stream_dataset.py:94).
+          expected = [
+              "Bir artı bir kaç eder?",
+              "Bu cümleyi tek kelimeyle özetle.\n\nKedi damın üstüne çıktı.",
+          ]
+          got = [r["prompt"] for r in state["results"]]
+          assert got == expected, got
+          assert state["results"][1]["source"] == {
+              "instruction": "Bu cümleyi tek kelimeyle özetle.",
+              "input": "Kedi damın üstüne çıktı.",
+          }, state["results"][1]["source"]
+
+          # The stop set for the tiny model: cfg.model.eos_token_id, which the byte
+          # fallback also reports as its own eos.
+          EOS = 2
+
+          for i, record in enumerate(state["results"]):
+              answers = record["answers"]
+              assert set(answers) == {"base", "lora"}, (i, sorted(answers))
+
+              base, lora = answers["base"], answers["lora"]
+              # Off and on are recorded separately, and each says what it was.
+              assert base["adapter"]["state"] == "off", base["adapter"]
+              assert base["adapter"]["scale"] == 0.0, base["adapter"]
+              assert base["adapter"]["checkpoint"] is None, base["adapter"]
+              assert lora["adapter"]["state"] == "on", lora["adapter"]
+              assert lora["adapter"]["scale"] == 1.0, lora["adapter"]
+              assert lora["adapter"]["checkpoint"] == ckpt, lora["adapter"]
+              assert lora["adapter"]["checkpoint_step"] == steps, lora["adapter"]
+
+              for name, ans in answers.items():
+                  where = f"prompt {i} / {name}"
+                  # The loop's termination contract: it stops on a stop token or on the
+                  # budget, and marks itself done either way.
+                  assert ans["done"] is True, where
+                  assert 1 <= ans["tokens"] <= budget, (where, ans["tokens"])
+                  assert len(ans["token_ids"]) == ans["tokens"], where
+                  assert ans["stopped_on"] == EOS or ans["tokens"] == budget, (where, ans)
+                  assert isinstance(ans["text"], str), where
+                  assert isinstance(ans["text_clean"], str), where
+                  assert ans["seconds"] > 0.0, where
+                  assert ans["peak_rss_gb"] > 0.0, where
+
+              # The per-token flush is real: the adapter-off answers this second process
+              # read off disk are exactly the ones the first process left there, token for
+              # token, and the second process did not regenerate them.
+              before = after_off["results"][i]["answers"]["base"]
+              assert before["token_ids"] == base["token_ids"], (i, before, base)
+              assert before["text"] == base["text"], i
+              assert "lora" not in after_off["results"][i]["answers"], i
+
+              print(f"prompt {i}: off {base['tokens']} tok {base['token_ids']} | "
+                    f"on {lora['tokens']} tok {lora['token_ids']}")
+
+          differed = sum(state["results"][i]["answers"]["base"]["token_ids"]
+                         != state["results"][i]["answers"]["lora"]["token_ids"]
+                         for i in range(len(state["results"])))
+          # Reported, not asserted. Whether a four-step adapter moves a greedy argmax on
+          # random weights is luck, and a test that depends on luck is worse than none.
+          # What is asserted above is the part that is not luck: the checkpoint carries a
+          # non-zero B, "on" loaded it and "off" zeroed it.
+          print(f"the adapter changed the token ids for {differed} of "
+                f"{len(state['results'])} prompts (informational)")
+          print("demo_generate.py: OK")
+          PY
+
+      # export_traces.py is run twice, because its most consequential branch is the one
+      # that decides whether a traced text leaves the machine. Once with the default
+      # (every text withheld from the exported manifest, replaced by a hash), once with
+      # --keep-text-for naming exactly one trace.
+      - name: "export_traces: validate and package the five committed traces into a throwaway release"
+        run: |
+          set -euo pipefail
+          # The baseline for "it never writes to <source_dir>", taken before it runs.
+          find evidence/traces -type f | sort | xargs sha256sum > "$TOOLS_DIR/traces.before"
+          wc -l < "$TOOLS_DIR/traces.before"
+
+          python scripts/export_traces.py evidence/traces "$TOOLS_DIR/release"
+          python scripts/export_traces.py evidence/traces "$TOOLS_DIR/release_kept" \
+            --keep-text-for tr_paragraph
+
+          find evidence/traces -type f | sort | xargs sha256sum > "$TOOLS_DIR/traces.after"
+
+      - name: "Assert: five traces validated, a sha256 per exported file, CHECKSUMS verify, texts withheld, and evidence/traces byte-for-byte unchanged"
+        run: |
+          set -euo pipefail
+
+          # 1. The source directory is untouched: same files, same bytes.
+          diff "$TOOLS_DIR/traces.before" "$TOOLS_DIR/traces.after"
+          echo "evidence/traces/ unchanged"
+
+          # 2. Every checksum the exporter wrote actually verifies against what it wrote.
+          ( cd "$TOOLS_DIR/release" && sha256sum -c CHECKSUMS.sha256 )
+          ( cd "$TOOLS_DIR/release_kept" && sha256sum -c CHECKSUMS.sha256 )
+
+          python - <<'PY'
+          import hashlib, json, os
+
+          tools = os.environ["TOOLS_DIR"]
+          src = "evidence/traces"
+          expected = sorted(os.listdir(src))
+          assert len(expected) == 5, expected
+
+          def load(name):
+              with open(os.path.join(tools, name, "MANIFEST.json"), encoding="utf-8") as f:
+                  return json.load(f)
+
+          release = load("release")
+          kept = load("release_kept")
+
+          # All five validated, none failed.
+          assert release["failed"] == [], release["failed"]
+          assert len(release["traces"]) == 5, len(release["traces"])
+          assert sorted(e["dir"] for e in release["traces"]) == expected
+
+          for entry in release["traces"]:
+              name = entry["dir"]
+              # A sha256 and a byte count for every file the exporter copied, and the
+              # derived analysis files came along too.
+              assert set(entry["files"]) == {"trace.bin", "trace.json",
+                                             "analysis.json", "analysis.md"}, entry["files"]
+              for fname, info in entry["files"].items():
+                  path = os.path.join(tools, "release", name, fname)
+                  assert os.path.isfile(path), path
+                  assert info["bytes"] == os.path.getsize(path), (path, info)
+                  assert len(info["sha256"]) == 64, (path, info)
+                  h = hashlib.sha256()
+                  with open(path, "rb") as f:
+                      for block in iter(lambda: f.read(1 << 20), b""):
+                          h.update(block)
+                  assert h.hexdigest() == info["sha256"], path
+
+              # 92 MoE layers, top-16 routing, and the exporter agreed with the manifest
+              # it read - it exits non-zero otherwise, but say it out loud.
+              assert entry["records"] == 92, entry
+              assert entry["k"] == 16, entry
+              assert entry["layers"]["count"] == 92 and entry["layers"]["contiguous"], entry
+              assert entry["max_expert_id"] < release["num_experts"], entry
+
+              # 3. The traced text and its token ids were withheld, and replaced by a hash
+              # of the text that was actually traced. This is the one branch that stands
+              # between someone else's paragraph and a public dataset.
+              with open(os.path.join(tools, "release", name, "trace.json"), encoding="utf-8") as f:
+                  clean = json.load(f)
+              with open(os.path.join(src, name, "trace.json"), encoding="utf-8") as f:
+                  original = json.load(f)
+              assert clean["text_released"] is False, name
+              assert "text" not in clean and "ids" not in clean, sorted(clean)
+              assert clean["text_sha256"] == hashlib.sha256(
+                  original["text"].encode("utf-8")).hexdigest(), name
+              assert clean["text_bytes"] == len(original["text"].encode("utf-8")), name
+              assert clean["n_ids"] == len(original["ids"]), name
+              assert entry["files"]["trace.bin"]["sha256"] == hashlib.sha256(
+                  open(os.path.join(src, name, "trace.bin"), "rb").read()).hexdigest(), name
+
+          # 4. --keep-text-for kept exactly the one trace it named, and nothing else.
+          for entry in kept["traces"]:
+              name = entry["dir"]
+              with open(os.path.join(tools, "release_kept", name, "trace.json"), encoding="utf-8") as f:
+                  manifest = json.load(f)
+              wanted = name.startswith("tr_paragraph")
+              assert manifest["text_released"] is wanted, name
+              assert ("text" in manifest) is wanted, name
+              assert ("ids" in manifest) is wanted, name
+              assert entry["text_released"] is wanted, name
+
+          # 5. The stubs a release needs before it can be published.
+          for stub in ("README.md", "sources.json", "MANIFEST.json", "CHECKSUMS.sha256"):
+              assert os.path.isfile(os.path.join(tools, "release", stub)), stub
+          with open(os.path.join(tools, "release", "sources.json"), encoding="utf-8") as f:
+              sources = json.load(f)
+          assert len(sources["texts"]) == 5, sorted(sources["texts"])
+
+          print("export_traces.py: OK - 5 traces, "
+                f"{sum(len(e['files']) for e in release['traces'])} files hashed")
+          PY
+
+      # The harness that will decide whether the pre-registered threshold was met. Here it
+      # runs against 8 MB of noise, over a corpus this job writes itself, with byte ids.
+      # Twice: once on the base model, once with the adapter loaded, because the real
+      # evaluation runs both and --checkpoint is the half that has never been exercised.
+      - name: "eval_perplexity: run the pre-registration harness end to end on a corpus this job writes (byte ids: exercises the harness, produces no measurement)"
+        run: |
+          set -euo pipefail
+          # Deliberately plain ASCII: one byte per id, so a chunk boundary cannot split a
+          # multi-byte character and the byte count per chunk is exactly --chunk.
+          cat > "$TOOLS_DIR/ci_corpus.txt" <<'TXT'
+          This file is not a corpus. It is filler written by a continuous-integration job
+          so that the evaluation harness has something of a known length to read. Nothing
+          computed from it says anything about any language model: the weights it is run
+          against are eight megabytes of deterministic noise, and the token ids are UTF-8
+          bytes rather than a trained vocabulary. What the run does establish is that the
+          harness reads a corpus file, cuts it into fixed chunks, prepends the beginning
+          of sequence token, sweeps every layer, computes a cross entropy, converts it to
+          bits per byte, and appends one well formed record per chunk to results.jsonl.
+          The real evaluation reads the held out Turkish and English corpora instead, with
+          the tokenizer that ships beside the checkpoint, and only then is the number it
+          prints worth reading.
+          TXT
+          wc -c "$TOOLS_DIR/ci_corpus.txt"
+
+          python scripts/eval_perplexity.py \
+            --arch-json "$LAZYLORA_MODEL_DIR/config.json" \
+            --tokenizer bytes \
+            --text "$TOOLS_DIR/ci_corpus.txt" \
+            --chunk "$EVAL_CHUNK" --chunks "$EVAL_CHUNKS" \
+            --tag ci-base
+
+          python scripts/eval_perplexity.py \
+            --arch-json "$LAZYLORA_MODEL_DIR/config.json" \
+            --tokenizer bytes \
+            --text "$TOOLS_DIR/ci_corpus.txt" --corpus ci_corpus \
+            --checkpoint "$LORA_CKPT" \
+            --chunk "$EVAL_CHUNK" --chunks "$EVAL_CHUNKS" \
+            --tag ci-lora
+
+      - name: "Assert: one record per chunk in results.jsonl with a finite bits-per-byte, every one stamped as not a measurement"
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json, math, os
+
+          chunk = int(os.environ["EVAL_CHUNK"])
+          chunks = int(os.environ["EVAL_CHUNKS"])
+          ckpt = os.environ["LORA_CKPT"]
+          path = os.path.join(os.environ["LAZYLORA_WORKSPACE_DIR"], "eval", "results.jsonl")
+
+          assert os.path.isfile(path), f"{path} was not written"
+          with open(path, encoding="utf-8") as f:
+              recs = [json.loads(line) for line in f if line.strip()]
+
+          assert len(recs) == 2 * chunks, f"{len(recs)} records, expected {2 * chunks}"
+          assert [r["tag"] for r in recs].count("ci-base") == chunks
+          assert [r["tag"] for r in recs].count("ci-lora") == chunks
+          assert {r["chunk"] for r in recs} == set(range(chunks))
+          assert {r["lang"] for r in recs} == {"ci_corpus"}
+
+          uniform = math.log(2048)          # the tiny model's vocabulary
+          for r in recs:
+              # Nothing here may be read as a measurement.
+              assert r["meaningful"] is False, r
+              assert r["tokenizer"] == "byte-fallback", r
+              assert "note" in r, r
+
+              # The arithmetic the threshold is stated in actually ran and is finite.
+              assert math.isfinite(r["loss"]) and r["loss"] > 0.0, r
+              assert math.isfinite(r["bits_per_byte"]) and 0.0 < r["bits_per_byte"] < 100.0, r
+              assert math.isfinite(r["perplexity"]) and r["perplexity"] > 1.0, r
+              assert 0.0 <= r["top1_acc"] <= 1.0, r
+              assert r["tokens"] == chunk, r
+              # Plain ASCII corpus: one byte per token id, so the decode round-trip is
+              # exact and bits-per-byte is loss / ln 2.
+              assert r["bytes"] == chunk, r
+              assert abs(r["bits_per_byte"] - r["loss"] / math.log(2)) < 1e-3, r
+              # The base model is untrained, so it must sit at the uniform prior: a loss
+              # far from ln(V) would mean the sweep, the ids or the LM head are wrong, not
+              # that anything was learned. Same check, same tolerance, as quickstart.sh
+              # step 4. It is asserted for the base run only - where the adapter is loaded
+              # the loss is free to move, and how far a four-step adapter on random
+              # weights moves it is not something this job should pretend to predict.
+              if r["tag"] == "ci-base":
+                  assert abs(r["loss"] - uniform) < 1.5, (r["loss"], uniform)
+
+              assert r["layers"] == 4 and r["vocab_size"] == 2048, r
+              assert r["commit"], "the git provenance stamp is empty"
+              assert r["peak_rss_gb"] > 0.0, r
+              assert r["checkpoint"] == (ckpt if r["tag"] == "ci-lora" else None), r
+
+          for r in recs:
+              print(f"{r['tag']} chunk {r['chunk']}: loss {r['loss']} bpb "
+                    f"{r['bits_per_byte']} top1 {r['top1_acc']} (NOT a measurement)")
+          print("eval_perplexity.py: OK")
+          PY
+
+      # The three artefacts none of these scripts had ever produced. Downloadable so a
+      # reader can look at the shape of a before/after file and a results.jsonl line long
+      # before the real ones exist.
+      - name: Upload what the three scripts produced
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tools-output
+          if-no-files-found: warn
+          path: |
+            /tmp/lazylora-tools/demo_generate.json
+            /tmp/lazylora-tools/workspace/eval/results.jsonl
+            /tmp/lazylora-tools/release/MANIFEST.json
+            /tmp/lazylora-tools/release/CHECKSUMS.sha256
+            /tmp/lazylora-tools/release/sources.json

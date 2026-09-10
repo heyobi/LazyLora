@@ -27,7 +27,10 @@ result.
 
 **How this was built.** This repository was written with heavy AI assistance — Claude Code,
 on this machine, through most of its life; the `Co-Authored-By: Claude` trailer starts at the
-twenty-ninth commit and is on forty of the sixty-eight, so it is not a complete record,
+twenty-ninth commit and is on every commit from there on — count it on the day you read
+this with `git log --format='%(trailers:key=Co-Authored-By,valueonly)' | grep -c Claude`
+against `git log --oneline | wc -l` — so the
+trailer is not a complete record of where the assistance was used,
 and what was not delegated is the hardware, the 1.56 TB checkpoint, every run whose timestamps
 are in [`evidence/`](evidence/), and the judgement, check by check, of what this work is
 allowed to claim — which is the reason [How you know this is real](#how-you-know-this-is-real)
@@ -77,7 +80,7 @@ measured intervals). Every row of that table is a line of
 [`evidence/forward_loss_proof.jsonl`](evidence/forward_loss_proof.jsonl), losses and Unix
 timestamps as the trainer wrote them. Those are the step times of **this** run, on
 sequences of about 541 tokens each; the main run's full 1024-token step is longer,
-step 1 measured 6 h 59 m 41 s on its own, and the run's measured cadence over its first three steps is 7.44 h (intervals 7.26 h and 7.62 h, `evidence/forward_loss_main.jsonl`), so 100 steps is about 31 days, finishing around 9-11 October 2026. The proof run's pace must not be quoted for either. The process held a
+step 1 measured 6 h 59 m 41 s on its own, and the run's measured cadence over its first three steps is 7.44 h (intervals 7.26 h and 7.62 h). Those two intervals are **not** derivable from the bundle: [`evidence/forward_loss_main.jsonl`](evidence/forward_loss_main.jsonl) is a snapshot that stops at step 1, so the cadence is read from the live trainer log on this machine and is the author's word until the snapshot is re-cut. At that pace 100 steps is about 31 days, finishing around 9-11 October 2026. The proof run's pace must not be quoted for either. The process held a
 resident set of 4.5–4.7 GB for 27 hours on a 7.6 GB machine. The USB bridge reset roughly
 45 times an hour under load; no read failed permanently. The run was stopped after five
 steps because the remaining steps would have added nothing. Details:
@@ -135,9 +138,11 @@ publication.
 per-layer dump, the 108.8 GB NVMe trunk and the 1.8 GB training checkpoints are not here and
 cannot be. The finite-difference harness prints its table to the terminal rather than to a
 file, so those numbers are quoted from [DEVAM.md](DEVAM.md) §11 and reproducing them means
-re-running `scripts/verify_backward.py` on the real weights. And the quickstart a reader
-would run — the op fixtures, the engine end to end on a generated checkpoint, the
-finite-difference check on it — has not itself been run yet.
+re-running `scripts/verify_backward.py` on the real weights. The quickstart a reader would
+run — the op fixtures, the engine end to end on a generated checkpoint, the
+finite-difference check on it — was in that same position until 10 September 2026, when it
+first executed on a GitHub Actions runner; it now runs on every push, and the badge above,
+not this paragraph, is the current claim.
 
 ---
 
@@ -145,7 +150,7 @@ finite-difference check on it — has not itself been run yet.
 
 > **This quickstart was written without being run, and the first machine to run it was not
 > mine.** It was written by reading the engine while the machine that could execute it was
-> occupied by the 29-day training job, so its first execution anywhere was on a GitHub
+> occupied by the 31-day training job, so its first execution anywhere was on a GitHub
 > Actions runner. Five of its seven steps passed on that first attempt; the sixth was
 > skipped for want of fixtures that are now committed, and the seventh failed — on a
 > gradient that turned out to be correct, with a finite-difference step too small for fp32
@@ -180,7 +185,7 @@ Step by step, in the order the script runs them, and documented in
 | | What it runs | What it shows |
 |---|---|---|
 | 0 | exports the `LAZYLORA_*` paths into a `mktemp -d` sandbox | nothing is written outside that directory, and it is deleted on exit |
-| 1 | `python -m unittest lazy_lora.tests.test_reference_ops` | the 8 op fixtures against the independent C implementation. This module skips rather than fails when the reference fixtures are absent, so read the result for `OK` and not `skipped`; `LAZYLORA_REF_FIXTURES` points at them. |
+| 1 | `python -m unittest lazy_lora.tests.test_reference_ops` | the 8 op fixtures against the independent C implementation, from the copies vendored at [`tests/fixtures/ops/`](tests/fixtures/ops/) — so this step passes on a plain clone and no longer reports `SKIP`, which is what it did on the first CI run, before the fixtures were committed on 10 September 2026. The module still skips rather than fails when it can find no fixtures at all, so read the result for `OK` and not `skipped`; `LAZYLORA_REF_FIXTURES` overrides the vendored copies with your own `kimi-k3-in-c` clone. |
 | 2 | `scripts/make_tiny_model.py` | generates a **real** Kimi-K3-shaped checkpoint from a fixed seed — 4 layers, hidden 256, 8 experts, MXFP4-packed, about 250 tensors and roughly 8.3 MB across two safetensors shards (the script prints the exact byte count) |
 | 3 | `scripts/check_shards.py` | the same integrity checker that guards the real run, against a real index |
 | 4 | a real forward pass through the real engine | streamed weights, KDA and MLA attention, the residual bank, the router and the MXFP4 experts, with the loss sitting at the uniform prior ln(2048) ≈ 7.6, which is where an untrained model belongs |
@@ -270,16 +275,23 @@ scripts/
                             builds its config from get_default_config(), so it runs against
                             the real 93-layer checkpoint only
   quickstart.sh, make_tiny_model.py   the no-checkpoint demo and the tiny generated
-                            checkpoint it runs on — written by reading the engine, never
-                            executed
+                            checkpoint it runs on — written by reading the engine and first
+                            executed on a GitHub runner on 10 September 2026; it runs on
+                            every push now, but never on the author's hardware, so the
+                            timings in docs/QUICKSTART.md are still derived from the code
   demo_generate.py          the same prompts answered with the adapter off and on, side by
                             side. There is no KV cache: every token is a full 93-layer sweep,
                             which the script estimates at about five minutes per token here,
                             so a 50-token answer would be a four-hour job. That estimate is
-                            read off the code, not timed. Never executed
+                            read off the code, not timed. Never executed on this machine —
+                            the machine has been busy with the training run since 9
+                            September — and exercised on a GitHub runner by
+                            .github/workflows/tools.yml, on the tiny generated checkpoint
+                            and not on Kimi K3
   export_traces.py          validates, strips text from, checksums and manifests trace
-                            directories for release. Never executed: the traces in
-                            evidence/ were copied out without it, texts included
+                            directories for release. Never executed on this machine: the
+                            traces in evidence/ were copied out without it, texts included.
+                            .github/workflows/tools.yml exercises it on a GitHub runner
   make_terminal_svg.py      the animated terminal figure at the top, from the run logs
   measure_routing.py, analyze_trace.py      routing traces and their statistics
   build_train_set.py        Dolly-15k-tr selection (400 examples), packing, prompt masking

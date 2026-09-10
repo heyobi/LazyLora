@@ -187,10 +187,24 @@ Correct, and it is the weakest link in the project. The threshold is in commit `
 8 September 2026 07:54:49, 29 hours before the run started, and an annotated tag
 `preregistration-2026-09-08` points at that commit, so GitHub records when the tag arrived
 as well as when the commit did. But git dates come from this laptop's clock, the repository
-was private until launch, the tag is mine too, and this repository's history was rewritten
-once before publication — so what you have is two timestamps from one machine and one
-operator, not an independent witness. Take it for exactly what it is: a pre-commitment I
-would have had to plan to fake a month in advance, and no further.
+was private until it went public on 10 September 2026, the tag is mine too, and this
+repository's history was rewritten **twice** before publication — so what you have is two
+timestamps from one machine and one operator, not an independent witness. Take it for
+exactly what it is: a pre-commitment I would have had to plan to fake a month in advance,
+and no further.
+
+Both rewrites, since a rewritten history is exactly the thing you should want itemised.
+The first dropped two AI-session database files and the tracked bytecode that had been
+committed by accident. The second normalised twenty-eight commits that carried a
+placeholder author identity, and stripped a `Claude-Session:` line the tool had appended to
+forty commit messages — one private URL, repeated identically, that resolves for my account
+and for nobody else, which is precisely what this repository asks nobody else to accept.
+Neither pass removed an attribution: the `Co-Authored-By: Claude` trailers were left alone,
+and they are still there, on every commit from the twenty-ninth on — count them on the day
+you read this with `git log --format='%(trailers:key=Co-Authored-By,valueonly)' | grep -c
+Claude` against `git log --oneline | wc -l`. Commit hashes quoted anywhere in this repository therefore date from after the
+second rewrite, while the dates they carry are the original author dates — which is why
+`6605306` is quotable at all.
 
 **Open:** [Evaluation protocol, registered before training](README.md#evaluation-protocol-registered-before-training); `git show 6605306` and `git show preregistration-2026-09-08`.
 
