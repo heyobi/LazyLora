@@ -442,6 +442,7 @@ PROBES = int(os.environ["QS_FD_PROBES"])
 SEED = int(os.environ["QS_SEED"])
 TOL = 2e-2
 REL_STEP = 2e-3          # the finite-difference step, as a fraction of the perturbed tensor's norm
+SIGNAL_ULPS = 2000.0     # and never so small that the loss moves by fewer fp32 ulps than this
 
 cfg, _ = load_tiny_config(os.environ["LAZYLORA_MODEL_DIR"])
 cfg.training.max_seq_len = N
@@ -482,6 +483,7 @@ for L in LAYERS:
     out0 = run(h_in, bank)
     R = torch.randn_like(out0)
     R64 = R.double()
+    f_base = float((out0.double() * R64).sum())     # the loss at the unperturbed point
 
     def loss_at(h_in_, bank_):
         return float((run(h_in_, bank_).double() * R64).sum())
@@ -521,7 +523,17 @@ for L in LAYERS:
         needs.
         """
         global worst_overall
-        eps = float(min(0.05 * scale, max(1e-4, REL_STEP * scale)))
+        # Two lower bounds on the step. The first is relative to the tensor being perturbed.
+        # The second is relative to the loss itself: the engine computes in fp32, so a loss
+        # of magnitude F is known to a few multiples of F * 2^-23, and a step that moves the
+        # loss by less than SIGNAL_ULPS of those is measuring round-off. The first CI runs
+        # showed exactly that - the same check passing at 4.9e-3 on one runner and failing at
+        # 2.0e-2 on another, because different CPUs round differently and the step sat on the
+        # noise floor. Using the analytic value as the slope estimate, the loss moves by about
+        # 2 * eps * |analytic| across the central difference.
+        noise = abs(f_base) * 2.0 ** -23
+        eps_signal = SIGNAL_ULPS * noise / max(2.0 * abs(analytic), 1e-12)
+        eps = float(min(0.05 * scale, max(1e-4, REL_STEP * scale, eps_signal)))
         for _ in range(4):
             fd1 = (fn(eps) - fn(-eps)) / (2 * eps)
             fd2 = (fn(eps / 2) - fn(-eps / 2)) / eps
