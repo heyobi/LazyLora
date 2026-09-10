@@ -87,7 +87,7 @@ ve yanlıştır.
    yeniden hesaplayıp sonucu Bulgular'a yaz, işareti kaldır. Checkpoint gerekmez, saniyeler
    sürer — ama yine de python çalıştırır, makine boşken yap.
 2. `scripts/export_traces.py` başlığındaki yanlış telif uyarısını düzelt.
-3. Ön-kayıt commit'ine (`85af2a8`, 8 Eylül 07:54:49) açıklamalı git etiketi koy. GitHub'da
+3. Ön-kayıt commit'ine (`6605306`, 8 Eylül 07:54:49) açıklamalı git etiketi koy. GitHub'da
    ikinci bir zaman damgası verir; **bağımsız bir damga değildir** — eşiklerin tarihi hâlâ
    bu makinenin saatine ve depo commit tarihlerine dayanır ve belgelerde zayıflık olarak
    böyle yazılmalıdır.

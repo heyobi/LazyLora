@@ -112,11 +112,11 @@ since the first version of this checklist, where it was only true of the working
       `git log --all --diff-filter=A --name-only --format='' | grep -c '__pycache__'` returns
       **0**. An earlier version of this checklist listed 29 `.pyc` files as still in history;
       that is no longer true and the item is closed, not pending.
-- [x] The annotated tag `preregistration-2026-09-08` exists on commit `85af2a8` and is
+- [x] The annotated tag `preregistration-2026-09-08` exists on commit `6605306` and is
       pushed. It gives a second timestamp; it is **not** an independent one, and every
       document that mentions it says so.
 - [x] The pre-registration sentence is in `README.md`: the threshold was committed
-      8 September 2026 at 07:54:49 (commit `85af2a8`), 29 hours before the run started on
+      8 September 2026 at 07:54:49 (commit `6605306`), 29 hours before the run started on
       9 September at 12:53:33 (`evidence/run_manifest.json`, `started=1788947613.66`).
 - [x] The weakness stated in the same breath, in every draft: git dates come from this
       laptop's clock, the repository was private until launch, and the tag is this account's
@@ -145,7 +145,7 @@ was found by a reader.
 | "about 7 h a step, 29 days, ends 8-9 October" | **7.44 h** a step — the mean of the 7.26 h and 7.62 h intervals between the main run's first three steps — so about **31 days** and around **9-11 October 2026** | Two more steps of the live run. 6 h 59 m was one step measured on its own; the cadence is what the duration follows from. Some documents still carry the old pair; `numbers.md` settles it |
 | "ends ~3 October" / "early October" | see above; no date earlier than 9 October is defensible | the same |
 | "relative error ≤ 2e-3" for the backward pass | worst **9.1e-3**, at layer 1, in two directions whose analytic derivative is about 3e-4; 3.6e-3 on the MLA layer; ≤ 2.0e-3 elsewhere. The 9.1e-3 leads; the 3.6e-3 never stands alone as "the worst" | `DEVAM.md` §11's own table, read instead of summarised |
-| Op fixtures "match at 1e-5" | seven of eight at 1e-5 absolute / 1e-4 relative; the composite MoE block at 2e-4 absolute with cosine 1.000000, and the test hardcodes that tolerance | `lazy_lora/tests/test_reference_ops.py`, `abs_tol=2e-4` on the `moe` case; commit `91964c6` is where the tolerance was widened |
+| Op fixtures "match at 1e-5" | seven of eight at 1e-5 absolute / 1e-4 relative; the composite MoE block at 2e-4 absolute with cosine 1.000000, and the test hardcodes that tolerance | `lazy_lora/tests/test_reference_ops.py`, `abs_tol=2e-4` on the `moe` case; commit `588ec07` is where the tolerance was widened |
 | The quickstart's finite-difference check "passes" | it **failed** on its first CI run: layer-3 residual bank, relative error 3.1e-2 on a 2e-2 tolerance. The analytic gradient was right; the step was too small for fp32 against a tensor of norm 60.85. The step is now relative to the perturbed tensor's norm with one Richardson extrapolation, and the same direction agrees to **2.09e-05** | Running it. `Bulgular.md` §20 and `scripts/debug_fd_bank.py`. A second pre-fix run had passed at 1.83e-2 by drawing a luckier random direction — so the check was also *flaky*, and CI caught both the error and its intermittency |
 | "disk-bound at ~115 MB/s", "saturates the band" | **110 MB/s aggregate** is the measured end-to-end rate (3,219,659,335,955 bytes after 8 h 06 m 57 s); **61 MB/s** is the effective rate inside one layer sweep (14.5 GB in 238 s), because the reader idles during compute; **115 MB/s** is the USB enclosure's own sequential benchmark and not a rate this engine achieves | The process read counter against `Bulgular.md` §16.5. "Saturates" is gone; the three numbers are never merged |
 | "peak memory 6.24 GB" quoted for this run | resident set 4.0-4.7 GB in the main run with swap in use; 4.5-4.7 GB for 27 h in the proof run; 6.24 GB is from an earlier 256-token step and is the highest ever recorded in the project, not this run's peak | `Bulgular.md` §18, `DEVAM.md` §17. The proof run's 27-hour resident set is never put in one sentence with the main run's step time |
@@ -210,7 +210,7 @@ is the thing to be suspicious of.
 
 ### The pre-registration
 
-- **It rests on this account's own commits and its own tag.** Commit `85af2a8` is dated by
+- **It rests on this account's own commits and its own tag.** Commit `6605306` is dated by
   this laptop's clock; the annotated tag `preregistration-2026-09-08` was made by the same
   person on the same machine; and the repository was private while both were made, so the
   earliest third-party record of either is GitHub's receipt of the push, which is later than

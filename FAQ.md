@@ -183,7 +183,7 @@ because the cost is per sweep and not per token.
 
 ### 10. "Your pre-registration is just a git commit you made yourself."
 
-Correct, and it is the weakest link in the project. The threshold is in commit `85af2a8` at
+Correct, and it is the weakest link in the project. The threshold is in commit `6605306` at
 8 September 2026 07:54:49, 29 hours before the run started, and an annotated tag
 `preregistration-2026-09-08` points at that commit, so GitHub records when the tag arrived
 as well as when the commit did. But git dates come from this laptop's clock, the repository
@@ -192,7 +192,7 @@ once before publication — so what you have is two timestamps from one machine 
 operator, not an independent witness. Take it for exactly what it is: a pre-commitment I
 would have had to plan to fake a month in advance, and no further.
 
-**Open:** [Evaluation protocol, registered before training](README.md#evaluation-protocol-registered-before-training); `git show 85af2a8` and `git show preregistration-2026-09-08`.
+**Open:** [Evaluation protocol, registered before training](README.md#evaluation-protocol-registered-before-training); `git show 6605306` and `git show preregistration-2026-09-08`.
 
 **Where the checking stops:** there is no external anchor, and I would rather say so than let the word "pre-registered" do work it has not earned. If you know a cheap externally timestamped one, tell me and the next run uses it.
 
