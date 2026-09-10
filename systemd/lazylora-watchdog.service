@@ -17,5 +17,7 @@ Description=LazyLoRA training watchdog (progress, health, auto-resume, push)
 Type=oneshot
 Environment=LAZYLORA_REPO=%h/calisma/LazyLora
 Environment=LAZYLORA_PYTHON=%h/venvs/lazylora/bin/python
+# Set LAZYLORA_PUSH_SESSION here or in watchdog.env if you use claude-code-server
+# push notifications; without it the watchdog simply does not push.
 EnvironmentFile=-%h/.config/lazylora/watchdog.env
 ExecStart=/usr/bin/env PYTHONPATH=${LAZYLORA_REPO} ${LAZYLORA_PYTHON} ${LAZYLORA_REPO}/scripts/watchdog.py

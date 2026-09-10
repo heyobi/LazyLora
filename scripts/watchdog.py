@@ -14,7 +14,8 @@ Each tick it
     expected step time);
   - checks the HDD mount, kernel disk/USB errors, NVMe free space, swap and GPU temperature;
   - writes <workspace>/status.json and status.txt (what `status.sh` shows);
-  - sends a push notification to the phone (claude-code-server's ccs_push) on every
+  - optionally sends a push notification (claude-code-server's ccs_push, if that is
+    installed; set LAZYLORA_PUSH_SESSION to the session it should address) on every
     completed step and on any problem, and once on completion.
 State between ticks lives in <workspace>/watchdog_state.json.
 """
@@ -38,7 +39,8 @@ def push(title, body):
     try:
         sys.path.insert(0, CCS_BIN)
         import ccs_push  # type: ignore
-        return ccs_push.send_all({"title": title, "body": body[:180], "session": "ziverbey-01"})
+        session = os.environ.get("LAZYLORA_PUSH_SESSION", "")
+        return ccs_push.send_all({"title": title, "body": body[:180], "session": session})
     except Exception as exc:
         return f"push unavailable: {exc}"
 
