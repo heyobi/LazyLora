@@ -54,9 +54,11 @@ weights are small. Everything it writes goes into one `mktemp -d` directory unde
 that is deleted on exit (`--keep`, `--dir` to place it); it does not write into the clone.
 
 **Its runtimes and memory figures are derived from the code, not measured.** The quickstart
-was written by reading the engine while the machine was occupied by the 29-day training run,
-and has never been executed here. If it takes ten minutes on your machine instead of the
-two or three the header claims, that is a data point and an issue worth opening.
+was written by reading the engine while the machine was occupied by the training run, and has
+still never been executed on the author's hardware — the first machine to run it was a GitHub
+Actions runner, and it runs there on every push. If it takes ten minutes on your machine
+instead of the two or three the header claims, that is a data point and an issue worth
+opening.
 
 Two more commands a reader can run:
 
@@ -101,6 +103,14 @@ contradict:
 
 A change to an op, a kernel or the gradient path is expected to come with the fixture or the
 finite-difference run that shows it still agrees.
+
+## AI-assisted contributions
+
+Allowed, and disclosed. Say in the pull request which tool wrote what — one line is enough.
+The rule is the one that governs everything else here: you are responsible for the diff, you
+have read it, and anything that touches a published number arrives with the file the number
+came from. This project discloses its own AI use at the top of the README, and it would be
+asymmetric to ask less of you than of itself.
 
 ## When your numbers disagree with the published ones
 

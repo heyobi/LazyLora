@@ -2,6 +2,8 @@
 
 Bu belge, **Moonshot AI Kimi K3 (2.78 Trilyon Parametreli MoE)** modeli ve **LazyLoRA Out-of-Core Motoru** üzerinde tüketici donanımında gerçekleştirilen tüm deneysel testlerin, canlı ölçüm metriklerinin ve elde edilen bilimsel/mühendislik bulgularının resmi kayıt günlüğüdür.
 
+Bu belge ile [docs/numbers.md](docs/numbers.md) çelişirse, oradaki tablo her sayının kaynağını gösterir ve kaynak karar verir.
+
 > **İki makine.** Rakamları birbirine taşımayın; hangi bölümün hangi makinede ölçüldüğü önemlidir.
 > **§1-15 masaüstü:** AMD Ryzen 5 3600, GTX 980 Ti, 16 GB RAM, Windows 11 + WSL2; ağırlıklar 1,86 TB'lık SATA diskte (§1; disk §10'da "NVMe değil, mekanik" diye düzeltildi).
 > **§16 ve sonrası dizüstü:** i7-7700HQ (4 çekirdek / 8 iş parçacığı, AVX2), 7,6 GB RAM, GTX 1050 2 GB, 117 GB NVMe (108,8 GB'ı paketlenmiş uzman olmayan gövde), 2 TB USB kutusundaki diskte 1.453,74 GiB = 1,56 TB checkpoint.
@@ -17,7 +19,7 @@ Bu belge, **Moonshot AI Kimi K3 (2.78 Trilyon Parametreli MoE)** modeli ve **Laz
 5. [Deney 2: 108.81 GB Gövde Paketleme (Packed Trunk) Analizi](#5-deney-2-10881-gb-gövde-paketleme-packed-trunk-analizi)
 6. [Deney 3: Tam 93 Katmanlı 2.78T Parametre Canlı Çıkarım Testi](#6-deney-3-tam-93-katmanlı-278t-parametre-canlı-çıkarım-testi)
 7. [Büyük Çıkarım Darboğazı & Teori Doğrulaması (Batching Paradoksu)](#7-büyük-çıkarım-darboğazı--teori-doğrulaması-batching-paradoksu)
-8. [Deney 4: 5-Token Spekülatif Doğrulama Testi (22x Hipotezi Doğrulandı)](#8-deney-4-5-token-spekülatif-doğrulama-testi-22x-hipotezi-doğrulandı)
+8. [Deney 4: 5-Token Spekülatif Doğrulama Testi (tek geçişte 3/5 kabul)](#8-deney-4-5-token-spekülatif-doğrulama-testi-tek-geçişte-35-kabul)
 9. [Nöral Taslak Model & GPU CUDA Altyapısı Bulguları](#9-nöral-taslak-model--gpu-cuda-altyapısı-bulguları)
 10. [Donanım Gerçeğinin Düzeltilmesi: Disk NVMe Değil, Mekanik](#10-donanım-gerçeğinin-düzeltilmesi-disk-nvme-değil-mekanik)
 11. [Deney 5: Motorun Gerçek Kimi K3 Mimarisiyle Karşılaştırılması](#11-deney-5-motorun-gerçek-kimi-k3-mimarisiyle-karşılaştırılması)
@@ -144,7 +146,7 @@ graph TD
 
 ---
 
-## 8. Deney 4: 5-Token Spekülatif Doğrulama Testi (22x Hipotezi Doğrulandı)
+## 8. Deney 4: 5-Token Spekülatif Doğrulama Testi (tek geçişte 3/5 kabul)
 
 Tek bir SSD geçişinde birden fazla tokeni aynı anda doğrulama yeteneğini ölçmek amacıyla `--tf-check` ile 5 tokenlik spekülatif dal Kimi K3'e sunuldu:
 
@@ -161,7 +163,7 @@ Sequence: [19180 ("Hello"), 11 (","), 1632 (" how"), 691 (" can"), 374 (" I"), 1
 | **Kabul Edilen Eşleşme (Matches)** | **`3 / 5 Pozisyon`** | **`%60,0 Kabul Oranı (Agreement Rate)`** |
 | **Kimi K3 Alternatif Tercihleri** | `[1 p=374 (" I")]`, `[2 p=554 (" are")]` | Modelin aslında `"Hello, I am..."` ve `"Hello, how are you..."` dallarını tercih ettiği görüldü. |
 | **Sonuç JSON (`k3_run.json`)** | `{"tf_positions":5,"tf_matches":3,"tf_agreement":0.6000}` | Resmi motor çıktısı |
-| **Tek Geçişte Kazanılan Zaman** | **`~82,5 Dakikalık İş Tek Geçişte Bitti`** | 3 tokenin seri üretimi 82.5 dk sürerken, tek bir SSD akışında 3 pozisyon onaylandı (**3x - 5x Hızlanma Kanıtlandı!**). |
+| **Tek Geçişte Kazanılan Zaman** | **`~82,5 Dakikalık İş Tek Geçişte Bitti`** | 3 tokenin seri üretimi 82.5 dk sürerken, tek bir SSD akışında 3 pozisyon onaylandı (ölçülen kabul oranı %60: tek geçişte 5 pozisyonun 3'ü onaylandı. Tek koşu, tek 6-tokenlik dizi — 22x hipotezi *sınanmadı*.). |
 
 ---
 
@@ -721,8 +723,8 @@ ilk değeri A'dan düşük çünkü A üzerindeki ilk güncellemeden sonra ölç
 koşusunun** adım süresi 5.5-5.8 saat (ileri ~2.8 saat, 110 s/katman; geri ~2.9 saat;
 adımlar arası ölçülen aralıklar 19756 / 20813 / 20756 / 20093 sn,
 `evidence/forward_loss_proof.jsonl` zaman damgalarından) — iki paket dizi ~541'er token
-olduğu için; asıl koşunun 1024 token'lık adımı 6 sa 59 dk 41 sn sürüyor (§18.1) ve zaman
-projeksiyonlarında o rakam kullanılır. Süreç 27 saat boyunca
+olduğu için; asıl koşunun 1024 token'lık adımı ilk üç adımda ortalama 7,44 saat sürüyor
+(§18.1) ve zaman projeksiyonlarında o rakam kullanılır. Süreç 27 saat boyunca
 RSS 4.5-4.7 GB'de kaldı; USB köprüsü bu sürede saatte ~45 kez sıfırlandı, hiçbir okuma
 kalıcı başarısız olmadı. 16 adımın kalanı bilgi katmayacağı için koşu 5. adımdan sonra
 durduruldu; checkpoint'ler `checkpoints/proof_dolly5/` (adım 1 ve 4).
@@ -756,8 +758,16 @@ Asıl koşu 9 Eylül 12:53:32'de başladı. İlk adım, 1024 token'lık tam bir 
 | **Toplam adım** | **6 sa 59 dk 41 sn** | |
 
 Kanıt koşusunun 5.5-5.8 saatlik adımı (yukarısı) bu rakamın yerine kullanılamaz: oradaki
-iki paket dizi ~541'er token'dı, burada dizi tam 1024 token. 100 adım bu hızla ~29 gün
-eder (DEVAM "ŞU AN").
+iki paket dizi ~541'er token'dı, burada dizi tam 1024 token.
+
+**Tek adım değil, tempo (10 Eylül 2026 düzeltmesi).** Yukarıdaki 6 sa 59 dk 41 sn yalnızca
+1. adımın kendi ölçümüdür ve bir süre zaman projeksiyonlarında tek başına kullanıldı. Üç
+adım tamamlandığında ardışık adımlar arasında ölçülen aralıklar **7,26 sa** ve **7,62 sa**
+çıktı; üç adımlık tempo **7,44 sa**. Projeksiyonlarda kullanılması gereken rakam budur:
+100 adım bu tempoyla **~31 gün** eder, yani bitiş **9-11 Ekim 2026** dolayıdır (DEVAM
+"ŞU AN"). Aralıklar koşunun kendi ileri-loss zaman damgalarından çıkar; depodaki
+`evidence/forward_loss_main.jsonl` 9 Eylül'de alındığı için yalnız 1. adımı içerir, 2. ve
+3. adımın satırları koşunun canlı günlüğündedir ve koşu bitince kanıt paketine girecektir.
 
 **Okuma hızı.** Sürecin `/proc` okuma sayacı, koşunun 8 sa 06 dk 57 sn'sinde
 3.219.659.335.955 bayt gösteriyordu → **110 MB/s toplam**. Bu toplam, USB diskteki
@@ -877,7 +887,7 @@ tablolarıdır.
 ## 20. Deney 11: Motorun yabancı bir makinede ilk koşusu (10 Eylül 2026)
 
 Depo yayına hazırlanırken `scripts/quickstart.sh` yazıldı: model checkpoint'i olmayan bir
-okurun iki dakikada çalıştırabileceği yol. Makine 29 günlük eğitimle dolu olduğu için betik
+okurun iki dakikada çalıştırabileceği yol. Makine ~31 günlük eğitimle dolu olduğu için betik
 koda bakılarak yazıldı, hiç çalıştırılmadı. İlk çalıştığı yer GitHub Actions'ın kendi
 makinesi oldu (ubuntu-latest, python 3.12, CPU torch). Sonuç: yedi adımın beşi ilk denemede
 geçti.
@@ -905,6 +915,15 @@ yönde bankayı bağıl olarak 3e-5 kadar oynatıyor ve kaybı kendi yuvarlama h
 değiştiriyor. Fark bölümü sinyali değil gürültüyü ölçüyordu. Kanıt, ham kaybın kendisinde
 görünüyor: eps=1e-4'te `f(+)-f(0)` 4.27e-6 iken `f(0)-f(-)` 4.92e-5, yani düz bir fonksiyonda
 eşit olması gereken iki fark on kat ayrışıyor.
+
+Aynı şey düşen tablonun kendisinden de okunabiliyor, ek bir koşu gerekmeden. Koşum eps'i
+`hedef/|analitik|` diye seçtiği için fark bölümünün payı her yönde sabit 2e-3'tür; o hâlde
+her satırın bağıl hatası doğrudan kaybın gürültü tabanını verir. Geçen dört yön için
+`bağıl hata × |analitik| × eps` sırasıyla 4.8e-6, 5.6e-6, 3.9e-6 ve 3.2e-6 çıkıyor — dört
+farklı yön, tek bir taban. 32.05 büyüklüğündeki bir kaybın fp32'deki çözünürlüğü 1.9e-6,
+yani bu taban iki üç birimlik yuvarlama. Banka yönü ise 6.1e-5 veriyor, otuz birim: banka
+kayba daha çok toplama üzerinden girdiği için gürültüsü de daha büyük. Beş satırın hepsi
+tek bir olguyu ölçüyormuş, ve o olgu gradyan değil aritmetik.
 
 Analitik gradyan doğru. eps=1e-1'de Richardson ile analitik değer 1.59e-4 bağıl hatayla
 yeniden üretiliyor, yani dört hane. Katman 1'de aynı kontrol her zaman geçiyordu, çünkü

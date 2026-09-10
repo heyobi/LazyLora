@@ -361,8 +361,9 @@ after the loss, which costs a little under half of the total.
 
 An earlier draft quoted 5.7 hours and 110 s per layer. Those are the **proof run's** rates,
 whose two packed sequences held about 541 tokens each rather than a full 1024, and they
-must not be quoted for the main run. A hundred steps at about seven hours is about 29 days,
-finishing around 8–9 October 2026.
+must not be quoted for the main run. Step 1 measured 6 h 59 m 41 s; the cadence over the
+first three steps is 7.44 h (7.26 h and 7.62 h between them), so a hundred steps is about
+31 days, finishing around 9-11 October 2026.
 
 ### 5. Before/after generation — an estimated five minutes per token
 
@@ -411,8 +412,8 @@ metric is Turkish news published after the model's release (baseline 0.455, succ
 threshold ≤ 0.441), with Turkish and English Wikipedia as memorisation and forgetting
 controls (0.311 and 0.194; English must not degrade past 0.198).
 
-**No evaluation result exists yet.** The 100-step run finishes around 8–9 October 2026 —
-100 steps at about seven hours is about 29 days — and the evaluation runs after it. Nothing
+**No evaluation result exists yet.** The 100-step run finishes around 9-11 October 2026 —
+100 steps at the measured 7.44 h cadence is about 31 days — and the evaluation runs after it. Nothing
 in this repository says the evaluation succeeded, or that Turkish improved, because it has
 not been run. A negative result will be reported as a negative result.
 

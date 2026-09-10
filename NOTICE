@@ -110,12 +110,14 @@ Third-party components and upstream works
 --------------------------------------------------------------------------------
 
 Nothing else in this repository is derived from a third-party work. Items 1-6
-above are the complete list. docs/LICENSES.md maps every component to its
-licence, its source and the attribution a redistributor owes, and gives the
-reasoning for the two parts that are not obvious: why routing arrays are
-released as CC0-1.0 facts about a computation, and why a LoRA adapter is
-treated as carrying the Kimi K3 License rather than the training data's
-ShareAlike.
+above are the complete list. That list covers third-party works and their
+licences. It is not a statement about tooling: the README says how this
+repository was written, AI assistance included. docs/LICENSES.md maps every
+component to its licence, its source and the attribution a redistributor
+owes, and gives the reasoning for the two parts that are not obvious: why
+routing arrays are released as CC0-1.0 facts about a computation, and why a
+LoRA adapter is treated as carrying the Kimi K3 License rather than the
+training data's ShareAlike.
 
 Attribution line for the measurements, if you redistribute them:
 

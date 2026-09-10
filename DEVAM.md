@@ -41,7 +41,8 @@ warmup 5, kosinüs, istem maskeli, her 5 adımda checkpoint
 
 **Ölçülen adım (adım 1, 9 Eylül):** **6 sa 59 dk 41 sn** — ileri 3 sa 11 dk 34 sn
 (123.6 s/katman, 93 katman), geri 3 sa 48 dk 07 sn (147.2 s/katman). Bu hızla 100 adım
-≈ **29 gün**, bitiş **~8-9 Ekim 2026**; canlı rakam
+≈ **31 gün** (ilk üç adımın ölçülen temposu 7,44 sa: aralıklar 7,26 ve 7,62 sa),
+bitiş **~9-11 Ekim 2026**; canlı rakam
 `LazyLora_Workspace/run_manifest.json`'da. **Okuma hızı üç ayrı sayıdır, karıştırma:**
 (i) 110 MB/s **toplam**, tek ölçülen uçtan uca rakam — 8 sa 06 dk 57 sn'de
 3.219.659.335.955 bayt (`/proc` okuma sayacı), USB diskteki uzmanlar ile NVMe gövdesi

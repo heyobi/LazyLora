@@ -1,34 +1,23 @@
 # r/LocalLLaMA
 
-**Before posting.** Repository public with `LICENSE` and `NOTICE`, README step time and
-end date correct. The routing traces and the 93-row comparison log **are in the repository
-now**, under `evidence/` — that changed the shape of this post, and the sentences below
-that point at them are present tense on purpose. Before posting, confirm on the public
-clone that `evidence/traces/` and `evidence/cmp93_en34_2026-09-06.log` are actually there;
-this subreddit will check within minutes and the post's whole credibility is that they
-can. The quickstart has never been executed — it was written by reading the engine while
-the laptop was busy training — so run it once from a fresh clone on another machine, or
-say in the post that its numbers are derived from the code rather than measured. Read the
-three warnings about the two loss files under "What you can reproduce" before posting, not
-after: the two files differ by one line and both carry a `"step": 1` row at loss 0.909084,
-which looks like a copy-paste until it is explained, and this is the subreddit that will
-`diff` them. Post after the Show HN so this can link it. Flair: Resources or Discussion.
-Expect the first ten comments to be "why not ktransformers", "isn't that just
-memorisation" and "7 hours per step lol" — the post answers all three before they are
-asked, which is the point.
+**Written** 9 September 2026, revised 10 September 2026.
+**Status:** not posted. When it is, this line gets the date and the link to the thread.
+
+Where this draft and [`../numbers.md`](../numbers.md) disagree, that table names the source
+and the source settles it.
 
 ---
 
 ## Title
 
 ```
-Training a LoRA adapter on Kimi K3 (2.78T params, 1.56TB of weights) on a 2017 laptop with 7.6GB of RAM — 7 hours per step, and here's the verification
+Training a LoRA adapter on Kimi K3 (2.78T params, 1.56TB of weights) on a 2017 laptop with 7.6GB of RAM — 7.4 hours per step, and here's the verification
 ```
 
 Alternates:
 
 ```
-Out-of-core LoRA on a 2.78T MoE from a USB hard disk: 7.6GB of RAM, 6h59m per 1024-token step
+Out-of-core LoRA on a 2.78T MoE from a USB hard disk: 7.6GB of RAM, 7.4h per 1024-token step
 ```
 
 ```
@@ -114,9 +103,13 @@ It proves nothing about whether the model is better at anything.
   every layer's cosine, max absolute difference, both engines' standard deviations and
   expert count, plus the 2869 s / 426.59 GB the run cost. Read the rows I did not choose to
   quote — layers 68-72 are the worst stretch (0.9857-0.9897) and they are all in there.
-- **Ops.** Eight op-level fixtures from the reference implementation: seven match at 1e-5
-  absolute / 1e-4 relative, the MoE block at 2e-4 absolute (cosine 1.000000) — that one is
-  the MXFP4 decode path's own rounding.
+- **Ops.** Eight op-level comparisons against the reference implementation: seven match at
+  1e-5 absolute / 1e-4 relative, the latent MoE block at 2e-4 absolute (cosine 1.000000) —
+  that one is the MXFP4 decode path's own rounding. The fifteen fixture files those come
+  from are published by `kimi-k3-in-c` under Apache-2.0, and they are vendored here at
+  `tests/fixtures/ops/` with the attribution and the upstream commit recorded, so the only
+  external check this project has runs on every push, on a machine neither implementation's
+  author controls — rather than only for a reader who thought to clone a second repository.
 - **Backward.** Central finite differences on real weights: layers 1 (KDA + MoE), 3 (MLA),
   12 (block boundary) and 13 (two bank entries) — layers 1 and 3 swept over all 16 LoRA
   tensors plus the input and residual-bank directions, layers 12 and 13 over the input and
@@ -139,7 +132,7 @@ It proves nothing about whether the model is better at anything.
 
 | | |
 |---|---|
-| 1024-token step | **6 h 59 m** — forward 3 h 11 m (123 s/layer), backward 3 h 48 m (147 s/layer) |
+| 1024-token step | **7.44 h** — the mean of the two intervals between the main run's first three steps (7.26 h and 7.62 h). Step 1 measured on its own was 6 h 59 m: forward 3 h 11 m (123 s/layer), backward 3 h 48 m (147 s/layer) |
 | Proof run step | 5.5-5.8 h, on the shorter packed sequences above |
 | Resident set | 4.5-4.7 GB held for 27 hours in the proof run; 4.0-4.7 GB in the main run, plus about 2.4 GB of swap. Not a peak: the highest figure recorded anywhere in the project is 6.24 GB, on an earlier 256-token step |
 | Disk, aggregate | **measured 110 MB/s** across the USB disk (routed experts) and the NVMe trunk (non-expert weights): 3,219,659,335,955 bytes through `read()` in the first 8 h 07 m of the main run |
@@ -166,7 +159,7 @@ layer-by-layer verification.
 The closest thing that also trains a trillion-parameter MoE locally is [KTransformers](https://github.com/kvcache-ai/ktransformers) +
 LLaMA-Factory on Kimi K2.5 (1 T): 2-4 × RTX 4090, an AMX Xeon, ~2 TB of system RAM,
 ~45 tok/s. If you have that machine, use it. This is a 2.8× larger model on roughly 260×
-less RAM, and it pays seven hours per step for the privilege. It is not a speed result.
+less RAM, and it pays about seven and a half hours per step for the privilege. It is not a speed result.
 
 As far as I can find, nobody has published a backward pass through a model this size
 inside a single consumer machine. If that is wrong, link it and I will add it to the
@@ -227,10 +220,9 @@ Honest tiers, because the checkpoint is 1.56 TB and you do not have it:
 
 | You have | You can check |
 |---|---|
-| Only the repo | Every routing table above, from `evidence/traces/` via `scripts/analyze_trace.py` — NumPy, seconds. The proof run's step time and the main run's forward, by subtracting timestamps in `evidence/forward_loss_*.jsonl` and `evidence/run_manifest.json` — read the three warnings under this table first. All 93 cosine rows, by reading `evidence/cmp93_en34_2026-09-06.log`. And `bash scripts/run_mock_tests.sh` — the engine end to end on synthetic weights, which proves the plumbing runs and nothing about numerics |
-| + `kimi-k3-in-c` cloned | the 8 op fixtures. Note: that test *skips* if the fixture directory is missing, so look for `OK`, not `OK (skipped=8)` |
+| Only the repo | Every routing table above, from `evidence/traces/` via `scripts/analyze_trace.py` — NumPy, seconds. The eight op-level comparisons against the C implementation, from the fifteen fixtures vendored at `tests/fixtures/ops/` — these used to require cloning a second repository and they do not any more. The proof run's step time and the main run's step-1 forward, by subtracting timestamps in `evidence/forward_loss_*.jsonl` and `evidence/run_manifest.json` — read the three warnings under this table first. All 93 cosine rows, by reading `evidence/cmp93_en34_2026-09-06.log`. `bash scripts/quickstart.sh`, which builds a tiny K3-shaped checkpoint and runs the whole loop on it, finite differences included. And `bash scripts/run_mock_tests.sh` — the engine end to end on synthetic weights, which proves the plumbing runs and nothing about numerics |
 | + the 1.56 TB checkpoint and a C dump | *regenerating* the 93-layer comparison, rather than reading the log of it |
-| + the checkpoint | the finite-difference check, which has no artefact — the harness prints to the terminal |
+| + the checkpoint | the finite-difference check on the real model, which has no artefact — that harness prints to the terminal |
 | + the published adapter | the evaluation, once it exists |
 
 `sha256sum -c SHA256SUMS` inside `evidence/` covers the whole bundle.
@@ -261,30 +253,40 @@ and you would find all three anyway:
 
 And be precise about which timings the bundle actually gives you. The proof run's step time
 is a subtraction of consecutive rows, because there the loss lines are whole steps apart.
-The main run's is not: there is one row for it so far. Its forward is derivable —
-`run_manifest.json`'s `started=1788947613.66` against that row's `time=1788959106` is
-11492 s, 3 h 11 m 32 s, two seconds under the 3 h 11 m 34 s the trainer printed, the gap
-being process start versus log write. The backward, 3 h 48 m 07 s, and the 6 h 59 m 41 s
-total are the trainer's own printed timings; nothing in the bundle confirms them, and I
-would rather say that than let "do the subtraction yourself" cover more than it does.
+The main run's is not, in the bundle as published: the 9 September snapshot carries one row
+for it. That row's forward is derivable — `run_manifest.json`'s `started=1788947613.66`
+against `time=1788959106` is 11492 s, 3 h 11 m 32 s, two seconds under the 3 h 11 m 34 s the
+trainer printed, the gap being process start versus log write. The backward, 3 h 48 m 07 s,
+and the 6 h 59 m 41 s total for step 1 are the trainer's own printed timings; nothing in the
+bundle confirms them. Nor does it confirm the 7.44 h I quote above as the step time: that is
+the mean of the two intervals between the run's first three logged forward passes, 7.26 h
+and 7.62 h, read from the live trainer log rather than from the September snapshot in the
+repository. I would rather say all of that than let "do the subtraction yourself" cover more
+than it does.
 
 Quickstart and the full command list with prerequisites are in the README:
 https://github.com/heyobi/LazyLora
 
-Fair warning on the quickstart: it has never been run. It builds a tiny random model in a
-temporary sandbox so you can exercise the engine without the 1.56 TB checkpoint, but it was
-written by reading the engine while this laptop was busy with the training run, so every
-runtime and memory figure in its documentation is derived from the code rather than
-measured. Whoever runs it first will find whatever I could not. Dependencies are two
-packages, `numpy>=1.24` and `torch>=2.3`.
+About the quickstart: it builds a tiny random model in a temporary sandbox so you can
+exercise the engine without the 1.56 TB checkpoint. It was written by reading the engine
+while this laptop was busy with the training run, so for a while it had never been executed
+anywhere — it runs on GitHub Actions now, on every push. Its first run found a real defect,
+and the defect was in the check rather than in the engine: the finite-difference test failed
+on layer 3's residual-bank direction at 3.1e-2. The analytic gradient was right; the step
+was too small for fp32 to resolve against a tensor of norm 60.85. The step is now taken
+relative to the perturbed tensor's norm with one Richardson extrapolation, and that
+direction agrees to 2.09e-05. A second CI run had passed that same check, because a
+different random direction was drawn — so the first run caught both the defect and the fact
+that it was intermittent. The whole episode is written up in Bulgular §20. Dependencies are
+two packages, `numpy>=1.24` and `torch>=2.3`.
 
 ### The caveat, and what happens next
 
 Currently running: 400 Turkish instruction examples from `atasoglu/databricks-dolly-15k-tr`
 packed into 154 sequences of at most 1024 tokens, 100 optimizer steps at batch size 1 —
 0.65 of an epoch, so about 260 of the 400 examples are seen exactly once. Started 9
-September; at the measured 6 h 59 m step that is about 29 days, so it lands around
-8-9 October.
+September; at the measured 7.44 h step that is about 31 days, so it lands around
+9-11 October.
 
 Then the evaluation, which was fixed **before** training: bits per byte on a 2048-token
 slice of Turkish news published after the model's release. Baseline 0.455, success is

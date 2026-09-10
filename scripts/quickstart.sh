@@ -13,13 +13,16 @@
 # is closed throughout.
 #
 # -------------------------------------------------------------------------------------
-# !! WRITTEN WITHOUT BEING EXECUTED !!
-# This script was written by reading the engine while the author's machine was busy with
-# the 29-day, 100-step training run, so it has never been run. Every runtime and every
-# memory figure quoted here and in docs/QUICKSTART.md was worked out from the code paths
-# involved; none of it has been observed. Running this once, on a machine that is not
-# busy, is exactly how it gets validated - .github/workflows/quickstart.yml does that on
-# a public runner. Report anything it gets wrong.
+# !! WRITTEN WITHOUT BEING EXECUTED, THEN EXECUTED IN PUBLIC !!
+# This script was written by reading the engine while the author's machine was busy with the
+# 100-step training run, so it had never been run when it was committed. The first machine to
+# run it was a GitHub Actions runner, on 10 September 2026: five of its seven steps passed on
+# that first attempt, one skipped for fixtures that are now committed, and step 7 failed - on
+# a gradient that turned out to be correct, with a finite-difference step too small for fp32
+# to resolve against a tensor of norm 60.8. That episode is written up in Bulgular.md section
+# 20, the step rule is fixed, and .github/workflows/quickstart.yml re-runs the whole thing on
+# every push. The runtimes and memory figures quoted here and in docs/QUICKSTART.md are still
+# worked out from the code paths rather than measured on the author's hardware.
 # -------------------------------------------------------------------------------------
 #
 # Needs: python3 (3.10+) with numpy and torch (>= 2.3, CPU is fine). torch 2.3 is a hard

@@ -1,27 +1,7 @@
 # To FareedKhan-dev (kimi-k3-in-c)
 
-Send this before the first public post, not after. The X thread and the Show HN both name
-`kimi-k3-in-c` in their first few lines, and the person whose engine is the oracle should
-hear it from us rather than from a notification.
-
-**Where.** Whatever contact the repository lists; if there is none, a GitHub Discussion or
-a short issue titled the same as the subject line works and has the advantage of being
-public and linkable. Keep it to one message. No follow-up if there is no reply — the
-credit stands either way.
-
-**Before sending.** The comparison log is in the repository now
-(`evidence/cmp93_en34_2026-09-06.log`), so this message links it rather than offering to
-attach it. That is a better message than the earlier draft: he does not have to ask, and
-nothing about the offer depends on us remembering to send a file. Check that the link
-resolves on the public repository before pressing send — a mail to the author of the
-oracle pointing at a 404 is the one version of this that does damage.
-
-**The paragraph about timing has to match what is actually true on the day you send it.**
-The draft below says the repository is public, because the first LinkedIn and X posts link
-it and they go out in the same few days. If the repository is still private when you send
-this, then beat 1 is not ready either: hold both, or say "public within days, before I post
-anything publicly" and mean it. What must not happen is telling the author of the oracle
-"October" while a live link to the repo is already in a public thread.
+**Not sent.** As of 10 September 2026 this letter has not gone to FareedKhan-dev; when it
+does, this line records the date and the channel it went through.
 
 ---
 
@@ -45,7 +25,13 @@ exactly. Your reference implementation also caught things I would not have found
 inputs positive, so roughly half the channels were being amplified where they should have
 been suppressed. After the fix, layer 3's output dropped from 18.88 to 5.27. Of your eight
 op fixtures, seven match mine at 1e-5 absolute; the MoE block needed 2e-4, which as far as
-I can tell is just the MXFP4 decode path's own rounding (cosine 1.000000).
+I can tell is just the MXFP4 decode path's own rounding (cosine 1.000000). One thing I
+should tell you rather than let you find it: I have copied the fixture files — fifteen of
+them, covering those eight ops — into my repository at `tests/fixtures/ops/`, unmodified,
+with your name, the upstream commit id and the Apache-2.0 notice. That is so the comparison
+runs in my continuous integration on every push instead of only for somebody who has cloned
+both repositories. If you would rather I fetched them at test time than vendored them, say
+so and I will change it.
 
 The whole comparison log is in my repository rather than in a folder on my desk:
 `evidence/cmp93_en34_2026-09-06.log` — every layer, with the cosine, the maximum absolute
@@ -75,7 +61,7 @@ SHA256SUMS` inside `evidence/` covers everything there.
 
 I am not asking for anything. This is just a heads-up: the repository is public at
 github.com/heyobi/LazyLora, and I am about to post about it. The training run itself is
-still going — about 29 days at the measured step time, so it finishes around 8-9 October —
+still going — about 31 days at the measured step time, so it finishes around 9-11 October —
 and the pre-registered evaluation runs when it does; I will publish that number either way.
 kimi-k3-in-c is credited in the README, in the acknowledgements and in the announcement
 posts, as the reference implementation the forward pass is validated against — if you would
@@ -85,5 +71,5 @@ and I will use yours.
 Thank you for writing it in C99 with a dump hook. That decision is the reason anyone can
 check my work.
 
-— [your name]
+— Ibrahim Polat
 github.com/heyobi/LazyLora

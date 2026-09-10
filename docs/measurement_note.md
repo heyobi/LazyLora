@@ -9,6 +9,8 @@ missing from the file as first published — and corrects one piece of arithmeti
 11: one adapter per expert would cost roughly 420 GB of fp32 weights, gradients and Adam
 moments, not the 315 GB stated there. No measurement has changed in any version.
 
+Where this document and [docs/numbers.md](docs/numbers.md) disagree, that table names the source and the source settles it.
+
 Every number in this note comes from a run recorded in `Bulgular.md` §16–§18 or
 `DEVAM.md` §11, §15–§17, and each table says which. The raw material of those runs is in
 `evidence/`: the five routing traces, the 93-layer comparison log, the per-step losses and
@@ -560,7 +562,8 @@ last line of `evidence/forward_loss_main.jsonl` is the main run's step 1 at Unix
 11 492 s — the 3 h 11 m 34 s of `Bulgular.md` §18.1, to within the seconds between process
 launch and the trainer's first line. The backward half finishes after the last line either
 file holds and is timed from the run's terminal output. At that rate 100 steps is about 29
-days, finishing around 8–9 October 2026. An earlier 256-token step took 4 h 31 m at
+days at step 1's pace; the cadence over the first three steps is 7.44 h, so about 31 days,
+finishing around 9-11 October 2026. An earlier 256-token step took 4 h 31 m at
 6.24 GB peak RSS (`DEVAM.md` §17), which is the highest resident set this engine has ever
 recorded; the main run sits at 4.0–4.7 GB. The five-step proof run of 8–9 September used
 two packed sequences of about 541 tokens each and took 5.5–5.8 h per step at 4.5–4.7 GB

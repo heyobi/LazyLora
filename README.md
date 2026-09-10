@@ -1,5 +1,7 @@
 # LazyLoRA
 
+[![quickstart](https://github.com/heyobi/LazyLora/actions/workflows/quickstart.yml/badge.svg)](https://github.com/heyobi/LazyLora/actions/workflows/quickstart.yml)
+
 Out-of-core LoRA fine-tuning and routing measurement for **Kimi K3** — 2.78 trillion
 parameters, 93 layers, 896 routed experts per layer, MXFP4 expert weights — on one 2017
 laptop: an i7-7700HQ, 7.6 GB of RAM, a 2 GB GTX 1050, and the 1.56 TB checkpoint on a hard
@@ -23,6 +25,14 @@ evaluation result exists yet.** The main run is in progress; the success thresho
 committed to git before it started, and a negative result will be published as a negative
 result.
 
+**How this was built.** This repository was written with heavy AI assistance — Claude Code,
+on this machine, through most of its life; the `Co-Authored-By: Claude` trailer starts at the
+twenty-ninth commit and is on thirty-seven of the sixty-five, so it is not a complete record,
+and what was not delegated is the hardware, the 1.56 TB checkpoint, every run whose timestamps
+are in [`evidence/`](evidence/), and the judgement, check by check, of what this work is
+allowed to claim — which is the reason [How you know this is real](#how-you-know-this-is-real)
+is the longest section in this file.
+
 ![One training step in the terminal: 93 layers forward, the forward loss, 93 layers backward](docs/figures/run_terminal.svg)
 
 *Step 1 of the main run, and nothing else: 93 layers forward in 3 h 11 m 34 s, the forward
@@ -37,8 +47,8 @@ fifth step. Rendered by
 
 *Türkçe okuyucu için:* proje günlüğü [DEVAM.md](DEVAM.md), deney kayıtları
 [Bulgular.md](Bulgular.md), fikir havuzu [Fikirler.md](Fikirler.md), kanıt koşusunun Türkçe
-anlatımı [docs/kanit_kosusu.html](docs/kanit_kosusu.html)
-([yayınlanmış sayfa](https://claude.ai/code/artifact/04001f6d-b7cb-4d4a-91c4-97b7a3416fdc)).
+anlatımı [docs/kanit_kosusu.html](docs/kanit_kosusu.html).
+<!-- A rendered copy of this page is published outside the repository; enable GitHub Pages (Settings -> Pages, main branch, /docs) once this repository is public and link it here. -->
 
 ---
 
@@ -66,7 +76,7 @@ measured intervals). Every row of that table is a line of
 [`evidence/forward_loss_proof.jsonl`](evidence/forward_loss_proof.jsonl), losses and Unix
 timestamps as the trainer wrote them. Those are the step times of **this** run, on
 sequences of about 541 tokens each; the main run's full 1024-token step is longer,
-6 h 59 m 41 s, and the proof run's pace must not be quoted for it. The process held a
+step 1 measured 6 h 59 m 41 s on its own, and the run's measured cadence over its first three steps is 7.44 h (intervals 7.26 h and 7.62 h, `evidence/forward_loss_main.jsonl`), so 100 steps is about 31 days, finishing around 9-11 October 2026. The proof run's pace must not be quoted for either. The process held a
 resident set of 4.5–4.7 GB for 27 hours on a 7.6 GB machine. The USB bridge reset roughly
 45 times an hour under load; no read failed permanently. The run was stopped after five
 steps because the remaining steps would have added nothing. Details:
@@ -86,6 +96,13 @@ before training started.
 
 Four independent checks, and — since `evidence/` went into the repository — the raw output
 of most of them.
+
+The questions a sceptic asks first, with the file to open for each, are in [FAQ.md](FAQ.md);
+every number quoted anywhere in this project, with its source, is in
+[docs/numbers.md](docs/numbers.md); what was checked before this repository went public, and
+what the checking found wrong, is in [docs/pre_publication_check.md](docs/pre_publication_check.md).
+
+Where this document and [docs/numbers.md](docs/numbers.md) disagree, that table names the source and the source settles it.
 
 | Check | Result | Scope, stated precisely |
 |---|---|---|
@@ -454,7 +471,7 @@ machine. If that is wrong, send the link and it goes in the table.
 | only this repo, and no intention of running anything | all 93 rows of [`evidence/cmp93_en34_2026-09-06.log`](evidence/cmp93_en34_2026-09-06.log), the 0.985744 minimum at layer 71 included; the per-step losses and timestamps behind the proof run's step times and the main run's forward (its backward and the 6 h 59 m 41 s total are the trainer's printed timings and are not in the bundle); and `sha256sum -c SHA256SUMS` for the bundle's integrity. |
 | only this repo, plus numpy | every routing table in [Bulgular.md](Bulgular.md) §16–17 and [docs/measurement_note.md](docs/measurement_note.md), recomputed from [`evidence/traces/`](evidence/traces/) — `scripts/analyze_trace.py` does it in one command (run it on a copy of the directory, or with `--prefix N`; without `--prefix` it rewrites `analysis.json` in place and breaks `sha256sum -c SHA256SUMS`), and the raw format is twenty lines of `struct`. |
 | only this repo, and a couple of minutes | `bash scripts/quickstart.sh` — the whole engine, the mock suite, ten training steps and a finite-difference gradient check, on a generated ~8.3 MB checkpoint. Proves the mechanism and the harness; proves nothing about Kimi K3. Runs in continuous integration on every push (`.github/workflows/quickstart.yml`); its timings still come from reading the code rather than from my hardware. |
-| + a `kimi-k3-in-c` clone | `python -m unittest lazy_lora.tests.test_reference_ops` — the 8 op fixtures against the reference. This module **skips** when the fixture directory is absent, so check for `OK` and not `skipped`; point `LAZYLORA_REF_FIXTURES` at the clone's `tests/fixtures/ops`. |
+| only this repo, in one command | `python -m unittest lazy_lora.tests.test_reference_ops` — the 8 op fixtures against the independent C implementation, from the copies committed at [`tests/fixtures/ops/`](tests/fixtures/ops/) under Apache-2.0. This is the only external ground truth here, and it runs in continuous integration on every push. `LAZYLORA_REF_FIXTURES` points it at your own clone of kimi-k3-in-c instead, if you would rather not trust the copy. |
 | + the 1.56 TB checkpoint and a C dump | `scripts/check_shards.py` (integrity), `scripts/compare_with_c_dump.py` (the 93-layer cosine table, ~48 minutes and 427 GB of reads), `scripts/verify_backward.py` (finite differences on real weights, fp32). |
 | + the published adapter | `scripts/eval_perplexity.py --corpus tr_news,tr_wiki,en_wiki`. The adapter will be published when the run ends; it is the one artefact that makes the central claim independently checkable. |
 
@@ -492,6 +509,37 @@ before publication, to drop two AI-session database files and the tracked byteco
 had been committed by accident; commit hashes quoted anywhere therefore date from after
 that rewrite, and the dates they carry are the original author dates.
 
+### If the result is negative
+
+Assume it will be, and say so before it lands. 100 optimizer steps at batch size 1 over
+roughly 51,000 trained tokens is a small amount of signal — 100 steps consumes 100 of the
+154 packed sequences, so about 260 of the 400 examples are seen once, 0.65 of an epoch.
+Publishing that expectation now is what makes the eventual number credible instead of an
+excuse; publishing it after a miss is an excuse.
+
+A pre-registered negative result is a better artefact than a marginal positive one, and it
+is rarer. It is publishable as-is:
+
+- **Title it plainly.** "…and it did not move the metric" in the title, not in paragraph
+  six. Reddit and HN reward this and punish the alternative.
+- **Publish the table** — news, TR wiki, EN wiki, before and after — and the diagnostics:
+  loss curve over 100 steps, per-layer LoRA gradient norms, and the before/after routing
+  trace comparison the protocol already calls for ([DEVAM.md](DEVAM.md) §16, item 5). "Did
+  the adapter shift the routing at all" is an interesting answer whether or not the
+  bits-per-byte moved — and the "before" half of it is already public in
+  `evidence/traces/`, so the after-trace goes into the same directory in the same format
+  and anyone can diff the two. That is a better negative-result artefact than the table.
+- **Name the likely causes without picking one:** signal volume (0.65 epoch, batch 1),
+  rank 16 on q/v plus the expert projections, lr 5e-4, and instruction data measured with
+  a language-modelling metric on news — a known mismatch.
+- **Do not quietly re-run with different settings and post that as the result.** If a
+  second run happens, it is exploratory and post-hoc, labelled as such, with the
+  pre-registered result still in the README above it.
+
+The engineering claim does not depend on the outcome. "The loop is verified and the
+adapter moves under gradient descent on this hardware" is true either way, and it is the
+claim this project is built on.
+
 ---
 
 ## Current run
@@ -503,10 +551,11 @@ about 260 of the 400 examples are seen once, over roughly 51k of the 78k tokens.
 5e-4 peak, cosine schedule, warmup 5, prompt tokens masked, checkpoint every 5 steps with the
 last three kept.
 
-At the measured 6 h 59 m 41 s per step the run needs about **29 days** — currently landing
-around **8–9 October 2026**, after which the evaluation above is run. The date moves with
-disk health; treat it as a projection from one measured step, not a commitment, and read the
-live figure out of `run_manifest.json` (the snapshot in `evidence/` is that file as it stood
+At **7.44 h** per step — the mean of the two step-to-step intervals measured so far in this
+run, 7.26 h and 7.62 h — the run needs about **31 days**, currently landing around **9–11
+October 2026**, after which the evaluation above is run. The date moves with disk health;
+treat it as a projection from three logged steps, not a commitment, and read the live
+figure out of `run_manifest.json` (the snapshot in `evidence/` is that file as it stood
 when the bundle was made). `scripts/watchdog.py`, on a systemd user timer every 15 minutes,
 reports progress, resumes from the newest checkpoint if the process dies, and reconnects the
 USB enclosure when it drops off the bus.
