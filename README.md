@@ -125,11 +125,17 @@ finite-difference check on it — has not itself been run yet.
 
 ## Quickstart, without the 1.56 TB checkpoint
 
-> **This quickstart has not been run yet.** It was written by reading the engine while the
-> machine that could run it was occupied by the 29-day training job. Every number in this
-> section — run time, resident set, tensor count, checkpoint size, starting loss — is
-> derived from the code, not measured. The first person to run it on a free machine is
-> validating it; please report whatever it gets wrong.
+> **This quickstart was written without being run, and the first machine to run it was not
+> mine.** It was written by reading the engine while the machine that could execute it was
+> occupied by the 29-day training job, so its first execution anywhere was on a GitHub
+> Actions runner. Five of its seven steps passed on that first attempt; the sixth was
+> skipped for want of fixtures that are now committed, and the seventh failed — on a
+> gradient that turned out to be correct, with a finite-difference step too small for fp32
+> to resolve against a tensor of norm 60.8. That is written up in `Bulgular.md` §20, the
+> step rule is fixed, and the check now agrees to 2.09e-05 instead of failing at 3.1e-02.
+> The workflow in `.github/workflows/quickstart.yml` runs the whole thing on every push, so
+> the badge, not this paragraph, is the current claim. Timings in this section are still
+> derived from the code rather than measured on my hardware.
 
 ```bash
 git clone https://github.com/heyobi/LazyLora && cd LazyLora
@@ -447,7 +453,7 @@ machine. If that is wrong, send the link and it goes in the table.
 |---|---|
 | only this repo, and no intention of running anything | all 93 rows of [`evidence/cmp93_en34_2026-09-06.log`](evidence/cmp93_en34_2026-09-06.log), the 0.985744 minimum at layer 71 included; the per-step losses and timestamps behind the proof run's step times and the main run's forward (its backward and the 6 h 59 m 41 s total are the trainer's printed timings and are not in the bundle); and `sha256sum -c SHA256SUMS` for the bundle's integrity. |
 | only this repo, plus numpy | every routing table in [Bulgular.md](Bulgular.md) §16–17 and [docs/measurement_note.md](docs/measurement_note.md), recomputed from [`evidence/traces/`](evidence/traces/) — `scripts/analyze_trace.py` does it in one command (run it on a copy of the directory, or with `--prefix N`; without `--prefix` it rewrites `analysis.json` in place and breaks `sha256sum -c SHA256SUMS`), and the raw format is twenty lines of `struct`. |
-| only this repo, and a couple of minutes | `bash scripts/quickstart.sh` — the whole engine, the mock suite, ten training steps and a finite-difference gradient check, on a generated ~8.3 MB checkpoint. Proves the mechanism and the harness; proves nothing about Kimi K3. **The script has never been run**; its figures come from reading the code. |
+| only this repo, and a couple of minutes | `bash scripts/quickstart.sh` — the whole engine, the mock suite, ten training steps and a finite-difference gradient check, on a generated ~8.3 MB checkpoint. Proves the mechanism and the harness; proves nothing about Kimi K3. Runs in continuous integration on every push (`.github/workflows/quickstart.yml`); its timings still come from reading the code rather than from my hardware. |
 | + a `kimi-k3-in-c` clone | `python -m unittest lazy_lora.tests.test_reference_ops` — the 8 op fixtures against the reference. This module **skips** when the fixture directory is absent, so check for `OK` and not `skipped`; point `LAZYLORA_REF_FIXTURES` at the clone's `tests/fixtures/ops`. |
 | + the 1.56 TB checkpoint and a C dump | `scripts/check_shards.py` (integrity), `scripts/compare_with_c_dump.py` (the 93-layer cosine table, ~48 minutes and 427 GB of reads), `scripts/verify_backward.py` (finite differences on real weights, fp32). |
 | + the published adapter | `scripts/eval_perplexity.py --corpus tr_news,tr_wiki,en_wiki`. The adapter will be published when the run ends; it is the one artefact that makes the central claim independently checkable. |

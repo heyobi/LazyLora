@@ -873,3 +873,68 @@ düzenleyici mi olduğu sınanmadı. Doğal ablasyon — uzman başına adaptör
 bandı/birlikte-etkinleşen uzman kümesi başına adaptör — gelecek iş olarak ölçüm notunun
 §11'inde adıyla yazılıdır; gruplamayı seçmenin doğal yolu da §17'nin yoğunlaşma ve örtüşme
 tablolarıdır.
+
+## 20. Deney 11: Motorun yabancı bir makinede ilk koşusu (10 Eylül 2026)
+
+Depo yayına hazırlanırken `scripts/quickstart.sh` yazıldı: model checkpoint'i olmayan bir
+okurun iki dakikada çalıştırabileceği yol. Makine 29 günlük eğitimle dolu olduğu için betik
+koda bakılarak yazıldı, hiç çalıştırılmadı. İlk çalıştığı yer GitHub Actions'ın kendi
+makinesi oldu (ubuntu-latest, python 3.12, CPU torch). Sonuç: yedi adımın beşi ilk denemede
+geçti.
+
+| adım | sonuç |
+|---|---|
+| minyatür checkpoint üretimi | geçti; gerçek safetensors baytları, gerçek MXFP4 uzman blokları |
+| shard bütünlüğü | geçti |
+| ileri geçiş (4 katman) | geçti |
+| 10 eğitim adımı | geçti; loss 7.6760 → 6.5086, `lora_B` sıfırdan 2.75e-02'ye, checkpoint yazılıp geri okundu |
+| native MXFP4 çekirdeği ↔ referans çözücü | geçti; fark tam olarak 0 |
+| referans op fixture'ları | atlandı (fixture'lar depoda değildi) |
+| sonlu farklar | **düştü**: katman 3 artık bankası, analitik 1.086830, merkezi fark 1.121618, bağıl hata 3.1e-2 (tolerans 2e-2) |
+
+### 20.1 Düşen kontrolün teşhisi
+
+Diğer dört yön 2e-3 civarında uyuşurken yalnız banka yönü sapıyordu. Teşhis için
+`scripts/debug_fd_bank.py` yazıldı ve yine GitHub'ın makinesinde koşturuldu: eps beş
+dekat boyunca taranıyor, Richardson ekstrapolasyonu uygulanıyor, her banka girdisi ve tek
+tek koordinatlar ayrı ayrı yoklanıyor.
+
+Sonuç kesin. Katman 3'te bankanın normu **60.85**, kayıp ise ~32 ve fp32'de hesaplanıyor,
+yani kaybın çözünürlüğü ~3e-6. Koşumun seçtiği 1.8e-3'lük mutlak adım, birim normlu bir
+yönde bankayı bağıl olarak 3e-5 kadar oynatıyor ve kaybı kendi yuvarlama hatasından daha az
+değiştiriyor. Fark bölümü sinyali değil gürültüyü ölçüyordu. Kanıt, ham kaybın kendisinde
+görünüyor: eps=1e-4'te `f(+)-f(0)` 4.27e-6 iken `f(0)-f(-)` 4.92e-5, yani düz bir fonksiyonda
+eşit olması gereken iki fark on kat ayrışıyor.
+
+Analitik gradyan doğru. eps=1e-1'de Richardson ile analitik değer 1.59e-4 bağıl hatayla
+yeniden üretiliyor, yani dört hane. Katman 1'de aynı kontrol her zaman geçiyordu, çünkü
+oradaki bankanın normu 0.91: aynı mutlak adım orada bağıl olarak 66 kat daha büyük.
+
+Ayrıca kontrolün **şansa bağlı** olduğu ortaya çıktı: ikinci bir koşuda, farklı rastgele yön
+çekildiği için aynı kontrol 1.83e-2 ile toleransın hemen altında kalıp geçmişti. Sürekli
+entegrasyonun ilk koşusu, hem hatayı hem de hatanın bazen görünmemesini yakaladı.
+
+### 20.2 Düzeltme ve ders
+
+Adım artık mutlak değil, oynatılan tensörün normuna göre seçiliyor (`REL_STEP = 2e-3`) ve
+iki adımlı Richardson ekstrapolasyonu uygulanıyor. Düşen yönde bağıl hata 3.1e-2'den
+**2.09e-05**'e indi; koşumun en kötü yönü 3.71e-3'te. Motora dokunulmadı, çünkü motorda bir
+hata yoktu.
+
+Ders, projenin geri kalanıyla aynı: bir sayının küçük olması doğru olduğu anlamına gelmiyor,
+büyük olması da yanlış olduğu anlamına gelmiyor. Sonlu fark, fp32'de hesaplanan bir kaybın
+üzerinde ancak adım yuvarlama tabanının yeterince üstündeyse anlamlıdır, ve bu taban
+oynatılan tensörün büyüklüğüne bağlıdır. Gerçek modelde bu tuzağa düşülmemişti (§11'de
+9.1e-3'lük en kötü hata, analitik türevi ~3e-4 olan iki yön için kaydedilmiş ve gürültü
+olarak işaretlenmişti), ama koşumun kuralı bunu tesadüfen doğru yapıyordu.
+
+### 20.3 Dış referansın depoya alınması
+
+Aynı koşuda "referans op fixture'ları atlandı" satırı, projenin tek dış doğrulama
+kaynağının yalnız C motorunu da klonlamış birinde çalıştığını gösterdi. Fixture'lar
+kimi-k3-in-c deposunda Apache-2.0 ile zaten yayınlanmış olduğu için 15 dosya (8.8 MB)
+`tests/fixtures/ops/` altına, atıf, yukarı akış commit kimliği ve sha256 toplamlarıyla
+kopyalandı. Artık motor, her push'ta, iki implementasyonun da yazarının kontrol etmediği bir
+makinede başkasının aritmetiğine karşı sınanıyor: sekiz op'un yedisi 1e-5 mutlak, latent MoE
+bloğu 2e-4 mutlak ve kosinüs 1.000000 ile eşleşiyor.
+
