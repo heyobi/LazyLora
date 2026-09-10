@@ -265,3 +265,44 @@ English:
 > 1.56 TB of weights on a USB disk, 7.6 GB of RAM, seven and a half hours a step — and the
 > adapter's loss fell from 0.909 to 0.157. All 2.78 trillion base parameters were never
 > touched.
+
+---
+
+## Posted length (TR / EN)
+
+What actually goes into the LinkedIn box. LinkedIn folds a post after three lines and few
+readers open a 700-word one, so this is the long version cut to what a professional
+audience reads, with every number traceable to `docs/numbers.md` and everything else
+delegated to the repository. Prepared 10 September 2026.
+
+### Türkçe
+
+2,78 trilyon parametreli Kimi K3'ün üzerine, 7,6 GB RAM'i olan bir dizüstünde bir LoRA adaptörü eğitiyorum.
+
+Model belleğe sığmıyor: 1,56 TB'lık ağırlık dosyası bir USB harici diskte duruyor. Her katman sırayla diskten akıyor, RAM'de aynı anda tek katman kalıyor. Modelin 2,78 trilyon parametresi baştan sona donuk; eğitilen tek şey onun üstüne oturan 590 MB'lık adaptör. Dev bir sözlüğü baştan yazmıyorsunuz, kenarına not düşüyorsunuz.
+
+Bu hafta döngünün gerçekten çalıştığını gördüm. Aynı iki diziyi tur tur verdim: loss 0,909 → 0,500 → 0,157 ve 0,521 → 0,193. Bu bir ezber testi; mekanizmanın uçtan uca doğru çalıştığını gösteriyor, modelin bir konuda iyileştiğini değil.
+
+En çok önemsediğim kısım hız değil, doğrulama. İleri geçişi bağımsız bir C implementasyonuna (FareedKhan-dev'in kimi-k3-in-c projesi) karşı katman katman karşılaştırıyorum: 93 katmanın hepsi kosinüs 0,9857 ve üzerinde eşleşiyor. 93 satırlık karşılaştırmanın tamamı depoda, benim seçmediğim satırlar dahil. Motor her push'ta GitHub'ın makinesinde, model olmadan, sentetik bir kopya üzerinde baştan sona koşuyor.
+
+Rakamlar: 1024 token'lık bir adım 7,44 saat, bellek 4-5 GB, disk 110 MB/s. Şu an 400 örneklik Türkçe talimat koşusu dönüyor, 9-11 Ekim civarı bitiyor. Türkçenin gerçekten iyileşip iyileşmediğini, koşu başlamadan önce git'e işlediğim bir eşikle sınayacağım. Sonuç olumsuz çıkarsa olumsuz yazacağım.
+
+Depo, yapay zekâ yardımıyla yazıldığını ilk ekranında söylüyor; doğrulamanın bu kadar ağır olmasının sebebi de bu.
+
+Kod, ölçümler ve ham kayıtlar: github.com/heyobi/LazyLora
+
+### English
+
+I am training a LoRA adapter on Kimi K3, a 2.78-trillion-parameter model, on a laptop with 7.6 GB of RAM.
+
+The model does not fit: its 1.56 TB of weights sit on a USB hard disk. Every layer streams in turn and one layer is resident at a time. All 2.78 trillion base parameters stay frozen; the only thing trained is a 590 MB adapter on top of them. You are not rewriting the dictionary, you are writing in its margin.
+
+This week I watched the loop actually work. The same two sequences, pass after pass: loss 0.909 → 0.500 → 0.157 and 0.521 → 0.193. That is a memorisation test. It shows the mechanism is correct end to end, not that the model got better at anything.
+
+What I care about most is not the speed but the verification. I check the forward pass layer by layer against an independent C implementation of the same model (FareedKhan-dev's kimi-k3-in-c): all 93 layers agree at a cosine similarity of 0.9857 or better. The full 93-row comparison is in the repository, including the rows I did not choose to quote. The engine also runs end to end on GitHub's own machines on every push, on a synthetic stand-in, with no model required.
+
+The numbers: a 1024-token step takes 7.44 hours, memory stays at 4-5 GB, the disk delivers 110 MB/s. A 400-example Turkish instruction run is going now and finishes around 9-11 October. Whether the model's Turkish actually improved gets tested against a threshold I committed to git before the run started. If the result is negative, I will publish it as negative.
+
+The README says on its first screen that the repository was written with heavy AI assistance; that is also why the verification is as heavy as it is.
+
+Code, measurements and raw logs: github.com/heyobi/LazyLora
