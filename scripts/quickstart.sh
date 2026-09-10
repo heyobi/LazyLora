@@ -438,7 +438,7 @@ LAYERS = [int(x) for x in os.environ["QS_FD_LAYERS"].split(",") if x.strip()]
 PROBES = int(os.environ["QS_FD_PROBES"])
 SEED = int(os.environ["QS_SEED"])
 TOL = 2e-2
-TARGET_DELTA = 2e-3
+REL_STEP = 2e-3          # the finite-difference step, as a fraction of the perturbed tensor's norm
 
 cfg, _ = load_tiny_config(os.environ["LAZYLORA_MODEL_DIR"])
 cfg.training.max_seq_len = N
@@ -499,9 +499,26 @@ for L in LAYERS:
           f"{len(entries)} bank entries): backward in {time.time() - t0:.1f} s")
     print(f"      {'direction':26s} {'analytic':>13s} {'central diff':>13s} {'eps':>9s} {'rel err':>9s}")
 
-    def check(label, analytic, fn, cap=0.5):
+    def check(label, analytic, fn, scale=1.0):
+        """
+        Central difference with the step size measured against the tensor being perturbed,
+        and one Richardson extrapolation.
+
+        The step has to be relative, not absolute. The engine computes in fp32, so a loss
+        of magnitude F is only known to about 1e-7 * F; a perturbation that moves the loss
+        by less than that measures nothing but round-off. The residual bank at layer 3 of
+        the tiny model has norm 60.8, and an absolute step of 1.8e-3 along a unit-norm
+        direction perturbs it by a relative 3e-5 -- below what fp32 can resolve, which is
+        why an earlier version of this check reported a 3.1e-2 "mismatch" on a gradient
+        that is in fact correct to four digits (docs/QUICKSTART.md, "the bank direction").
+        With eps = 2e-3 * ||tensor|| the same direction agrees to 1.6e-4.
+
+        Richardson combines the steps eps and eps/2 into an estimate whose leading
+        truncation term cancels, so the check is accurate at the large step that fp32
+        needs.
+        """
         global worst_overall
-        eps = float(min(cap, max(1e-4, TARGET_DELTA / max(abs(analytic), 1e-6))))
+        eps = float(min(0.05 * scale, max(1e-4, REL_STEP * scale)))
         for _ in range(4):
             fd1 = (fn(eps) - fn(-eps)) / (2 * eps)
             fd2 = (fn(eps / 2) - fn(-eps / 2)) / eps
@@ -510,6 +527,7 @@ for L in LAYERS:
                 eps /= 8                      # the step crossed a routing flip; shorten it
                 continue
             break
+        fd2 = (4 * fd2 - fd1) / 3             # Richardson: cancels the eps^2 term
         rel = abs(analytic - fd2) / max(abs(analytic), abs(fd2), 1e-12)
         worst_overall = max(worst_overall, rel)
         flag = "   <-- MISMATCH" if rel > TOL else ""
@@ -531,18 +549,18 @@ for L in LAYERS:
                     return loss_at(h_in, bank)
                 finally:
                     p.add_(d, alpha=-eps)
-        check(f"param {names[i]}", analytic, fn)
+        check(f"param {names[i]}", analytic, fn, scale=float(params[i].norm()))
 
     d = torch.randn_like(h_in)
     d = d / d.norm()
     check("h_in", float((grad_h_in.to(d.dtype) * d).sum()),
-          lambda eps, d=d: loss_at(h_in + eps * d, bank), cap=0.01 * float(h_in.norm()))
+          lambda eps, d=d: loss_at(h_in + eps * d, bank), scale=float(h_in.norm()))
 
     if bank is not None:
         d = torch.randn_like(bank)
         d = d / d.norm()
         check("residual bank", float((grad_bank.to(d.dtype) * d).sum()),
-              lambda eps, d=d: loss_at(h_in, bank + eps * d), cap=0.01 * float(bank.norm()))
+              lambda eps, d=d: loss_at(h_in, bank + eps * d), scale=float(bank.norm()))
 
 trainer.close()
 print(f"      worst relative error {worst_overall:.2e} (tolerance {TOL:.0e})")
