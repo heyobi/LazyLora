@@ -29,16 +29,16 @@ CA, CB = "#5ad1ff", "#ffab6b"
 
 TXT = {
     "tr": dict(
-        title="2,78 trilyon parametreli bir modelin LoRA\nadaptörü, 7,6 GB RAM'li bir dizüstünde\neğitildi",
-        sub="Kimi K3 · 93 katman · katman başına 896 uzman · 1,56 TB checkpoint bir USB diskte\nLoRA adaptörü çekirdek-dışı eğitim: her katman diskten akar, RAM'de tek katman durur",
+        title="2,78 trilyon parametreli bir modelin LoRA\nadaptörü, 8 GB RAM'li bir dizüstünde\neğitiliyor",
+        sub="Kimi K3 · 93 katman · katman başına 896 uzman · 1,56 TB checkpoint bir USB diskte\n8 GB RAM (7,6 GB kullanılabilir): her katman diskten akar, RAM'de tek katman durur",
         xlabel="aynı dizi üzerinde kaçıncı tur", ylabel="loss (yalnız cevap token'ları)",
         sa="A dizisi", sb="B dizisi",
         stats=[("5,5-5,8 sa", "adım (kanıt koşusu)"), ("4,5-4,7 GB", "yerleşik bellek"), ("590 MB", "eğitilen ağırlık"),
                ("1,56 TB", "diskteki model")],
-        foot="Kanıt koşusu, 8-9 Eylül 2026 · beş örnek, iki paket dizi (1082 token, 528'i eğitilen) · github.com/heyobi/LazyLora"),
+        foot="Kanıt koşusu, 8-9 Eylül 2026 · beş örnek, iki paket dizi · github.com/heyobi/LazyLora"),
     "en": dict(
-        title="A LoRA adapter on a 2.78-trillion-parameter\nmodel, trained out of core on a laptop\nwith 7.6 GB of RAM",
-        sub="Kimi K3 · 93 layers · 896 experts per layer · a 1.56 TB checkpoint on a USB hard disk\nOut-of-core LoRA: every layer streams from disk, one layer at a time is resident",
+        title="A LoRA adapter on a 2.78-trillion-parameter\nmodel, being trained out of core on a\nlaptop with 8 GB of RAM",
+        sub="Kimi K3 · 93 layers · 896 experts per layer · a 1.56 TB checkpoint on a USB hard disk\n8 GB of RAM (7.6 GB usable): every layer streams from disk, one layer at a time is resident",
         xlabel="pass over the same sequence", ylabel="loss (assistant tokens only)",
         sa="sequence A", sb="sequence B",
         stats=[("5.5-5.8 h", "per step (proof run)"), ("4.5-4.7 GB", "resident set"), ("590 MB", "trainable weights"),
@@ -167,6 +167,55 @@ def social():
     plt.close(fig)
 
 
+
+def main_run_card(steps_done, total=100):
+    """Square card for the main run: progress, the anatomy of one measured step, the dates."""
+    fig = plt.figure(figsize=(6, 6), dpi=200, facecolor=BG)
+    fig.text(0.07, 0.955, "Asıl koşu: 400 Türkçe talimat örneği,\n100 adım, 1024 token", color=FG,
+             fontsize=15, fontweight="bold", va="top", linespacing=1.35)
+    fig.text(0.07, 0.835, "9 Eylül 2026 12:53'te başladı · ölçülen tempoyla 9-11 Ekim'de bitiyor",
+             color=MUTED, fontsize=8.3, va="top")
+
+    # progress
+    ax = fig.add_axes([0.07, 0.70, 0.86, 0.06], facecolor=BG); ax.axis("off")
+    ax.barh(0, total, color=GRID, height=0.6); ax.barh(0, steps_done, color=CA, height=0.6)
+    ax.set_xlim(0, total); ax.set_ylim(-0.6, 0.6)
+    fig.text(0.07, 0.775, f"ilerleme  {steps_done}/{total} adım", color=FG, fontsize=10.5, fontweight="bold")
+
+    # one step, measured (step 1 of the main run)
+    fig.text(0.07, 0.63, "bir adımın anatomisi (1. adım, ölçüldü)", color=FG, fontsize=10.5, fontweight="bold")
+    ax2 = fig.add_axes([0.07, 0.535, 0.86, 0.07], facecolor=BG); ax2.axis("off")
+    fwd, bwd = 3 + 11.5 / 60, 3 + 48.1 / 60
+    ax2.barh(0, fwd, color=CA, height=0.7)
+    ax2.barh(0, bwd, left=fwd, color=CB, height=0.7)
+    ax2.set_xlim(0, fwd + bwd); ax2.set_ylim(-0.6, 0.6)
+    ax2.text(fwd / 2, 0, "ileri geçiş · 93 katman\n3 sa 11 dk", ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
+    ax2.text(fwd + bwd / 2, 0, "geri geçiş · 93 katman\n3 sa 48 dk", ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
+    fig.text(0.07, 0.49, "toplam 6 sa 59 dk · ortalama adım 7,44 sa (ilk üç adım) · 93 katman her adımda iki kez okunuyor",
+             color=MUTED, fontsize=7.8)
+
+    fig.add_artist(plt.Line2D([0.07, 0.93], [0.42, 0.42], color=GRID, lw=1.2))
+    stats = [("110 MB/s", "ölçülen okuma hızı"), ("4,0-4,7 GB", "yerleşik bellek"),
+             ("590 MB", "eğitilen adaptör"), ("2,78 T", "donuk parametre")]
+    for i, (big, small) in enumerate(stats):
+        x = 0.085 + i * 0.222
+        fig.text(x, 0.35, big, color=FG, fontsize=13.5, fontweight="bold")
+        fig.text(x, 0.31, small, color=MUTED, fontsize=8.2)
+
+    fig.text(0.07, 0.215, "Doğrulama", color=FG, fontsize=10.5, fontweight="bold")
+    fig.text(0.07, 0.19, "İleri geçiş, bağımsız bir C implementasyonuyla 93 katmanın hepsinde karşılaştırıldı\n"
+                         "(kosinüs ≥ 0,9857). Gradyanlar sonlu farkla sınandı. Karşılaştırma kaydı ve\n"
+                         "yönlendirme izleri depoda; motor her push'ta GitHub'ın makinesinde model olmadan koşuyor.",
+             color=MUTED, fontsize=8.3, va="top", linespacing=1.5)
+    fig.text(0.07, 0.04, "Kaynak: evidence/forward_loss_main.jsonl, run_manifest.json · github.com/heyobi/LazyLora",
+             color=MUTED, fontsize=7.1)
+    p = os.path.join(OUT, "main_run_tr.png")
+    fig.savefig(p, facecolor=BG); plt.close(fig); return p
+
+
 if __name__ == "__main__":
     print(card("tr")); print(card("en")); wide(); social()
+    import sys as _s
+    _n = int(_s.argv[1]) if len(_s.argv) > 1 else 3
+    print(main_run_card(_n))
     print(os.path.join(OUT, "proof_loss_wide.png")); print(os.path.join(OUT, "social_preview.png"))

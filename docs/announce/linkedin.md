@@ -307,19 +307,22 @@ The README says on its first screen that the repository was written with heavy A
 
 Code, measurements and raw logs: github.com/heyobi/LazyLora
 
-### Türkçe, kısa (LinkedIn kutusuna giren sürüm)
+### Türkçe, kısa (LinkedIn kutusuna giren sürüm, 10 Eylül)
 
-7,6 GB RAM'li bir dizüstünde, 2,78 trilyon parametreli Kimi K3'ün üzerine LoRA adaptörü eğitiyorum.
+Görseller: `docs/figures/proof_loss_tr.png` (kanıt koşusu kartı, başlığı "eğitiliyor") ve
+`docs/figures/main_run_tr.png` (asıl koşu kartı: ilerleme, bir adımın anatomisi, tarihler).
+Kartlar "8 GB RAM (7,6 GB kullanılabilir)" der: 8 GB takılı bellek, 7,6 GB işletim
+sisteminin gördüğü; belgeler 7,6'yı kullanır, gönderi takılı belleği söyler. Yapay zekâ
+açıklaması gönderide yok, README'nin ilk ekranında duruyor.
 
-Model belleğe sığmıyor: 1,56 TB'lık ağırlıklar USB diskte duruyor, her katman sırayla diskten akıyor. Modelin kendisi donuk; eğitilen tek şey 590 MB'lık adaptör.
+Kimi K3, 2,78 trilyon parametreli bir model. Ben onun üstüne, 8 GB RAM'li bir dizüstünde LoRA adaptörü eğitiyorum.
 
-Bu hafta döngünün çalıştığını gördüm: aynı diziyi tur tur verdim, loss 0,909 → 0,500 → 0,157. Bu bir ezber testi, mekanizma kanıtı; modelin iyileştiğinin kanıtı değil.
+Model belleğe sığmıyor. 1,56 TB'lık ağırlıklar USB diskte duruyor; her katman sırayla diskten okunuyor, işi bitince atılıyor. Modelin kendisine dokunulmuyor, eğitilen tek şey 590 MB'lık adaptör.
 
-Asıl önemsediğim doğrulama: ileri geçiş, bağımsız bir C implementasyonuyla 93 katmanın hepsinde karşılaştırıldı, karşılaştırmanın tamamı depoda. Motor her push'ta GitHub'ın makinesinde, model olmadan koşuyor.
+Bu hafta döngünün doğru çalıştığını gördüm. Aynı diziyi tekrar tekrar verdim, loss 0,909'dan 0,157'ye indi. Bu bir ezber testi, mekanizmanın kanıtı. Modelin Türkçesi gerçekten iyileşti mi, onu asıl koşu bitince, önceden git'e işlediğim bir eşikle ölçeceğim. Olumsuz çıkarsa olumsuz yazacağım.
 
-Bir adım 7,44 saat. 400 örneklik Türkçe koşu 9-11 Ekim civarı bitiyor; sonucu önceden git'e işlediğim eşikle ölçeceğim, olumsuzsa olumsuz yazacağım.
+Asıl uğraştığım şey doğrulama oldu. İleri geçişi bağımsız bir C implementasyonuyla 93 katmanın hepsinde karşılaştırdım; karşılaştırmanın tamamı depoda. Motor her push'ta GitHub'ın makinesinde, model olmadan çalışıyor.
 
-Depo, yapay zekâ yardımıyla yazıldığını ilk ekranında söylüyor; doğrulamanın ağır olmasının sebebi bu.
+Bir eğitim adımı 7,44 saat sürüyor. 400 örneklik Türkçe koşu 3/100 adımda, 9-11 Ekim civarı bitiyor.
 
 github.com/heyobi/LazyLora
-
