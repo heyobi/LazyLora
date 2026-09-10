@@ -30,8 +30,19 @@ Third-party components and upstream works
    Licensed under the Apache License, Version 2.0.
 
    LazyLoRA's forward pass is verified layer by layer against this independent C
-   implementation. Its op-level test fixtures and per-layer hidden-state dumps
-   are read from a local checkout at run time; they are not redistributed here.
+   implementation.
+
+   Redistributed here: the fifteen files in tests/fixtures/ops are copied
+   unmodified from that project's tests/fixtures/ops, at upstream commit
+   c223f490047e93600f05fbdab06b9742d2b8ef08 (29 August 2026), under the terms of
+   the Apache License 2.0. They carry the weights, inputs and expected outputs of
+   the operations this engine is compared against, and they are included so that
+   the comparison runs for every reader and in continuous integration rather than
+   only for someone who has cloned a second repository. See
+   tests/fixtures/ops/README.md.
+
+   Not redistributed: that project's per-layer hidden-state dumps, which are
+   produced from the model weights and are read from a local checkout at run time.
 
    Vendored code: if docs/attic/patch_k3.py is present in the tree you have, it
    contains the function mem_available_bytes(), copied from src/cli/k3_run.c of
