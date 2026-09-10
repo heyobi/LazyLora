@@ -42,20 +42,25 @@ Repository: https://github.com/heyobi/LazyLora. Please poke holes, especially in
 ## App-safe body (no table; the Reddit mobile editor shows raw pipes)
 
 Posted to r/LocalLLM (not r/LocalLLaMA, whose in-sub karma gate the account has not passed)
-on 10 September 2026 with the author's own title. Same numbers, the table turned into lines.
+on 10 September 2026, about 18:45, with the author's own title. Same numbers, the table turned into lines.
 
 Kimi K3 is a 2.78 T MoE; its 1.56 TB checkpoint sits on a USB hard disk plugged into a 2017 laptop (i7-7700HQ, 7.6 GB of RAM, a 2 GB GTX 1050 that only does the routed-expert matmuls). I am training a LoRA adapter on it out of core: the non-expert weights of one layer at a time, its 896 experts streamed one by one since together they are 15.7 GB, base weights frozen, and the 590 MB adapter the only thing trained.
 
 The one-minute check is evidence/cmp93_en34_2026-09-06.log: my forward pass against kimi-k3-in-c, FareedKhan-dev's independent C implementation, all 93 layers at cosine 0.9857 or better, output 0.999840, on 34 tokens with LoRA B zeroed. evidence/traces/ holds raw routing records for five texts over all 92 MoE layers; scripts/analyze_trace.py recomputes every routing number below with NumPy alone. scripts/quickstart.sh builds a synthetic K3-shaped checkpoint and runs a forward pass, ten training steps and a finite-difference gradient check on a GitHub runner on every push, plus eight op-level checks against kimi-k3-in-c fixtures. Its first run failed: the gradient check missed at 3.1e-2 on a 2e-2 tolerance because the step was below fp32 resolution against a tensor of norm 60.85. The gradient was right; the check, made noise-aware, agrees to 2.09e-05.
 
-The numbers, all from the logs in the repo:
+The numbers, all from the logs in the repo (plain lines: the Reddit app turns pasted bullets into a code block):
 
-- 1024-token step: about 7.4 h, the mean of the 7.26 h, 7.62 h, 7.37 h intervals between the first 4 steps
-- step 1, forward / backward: 3 h 11 m 34 s / 3 h 48 m 07 s
-- resident set: 4.0-4.7 GB, swap in use
-- read throughput: 110 MB/s aggregate, 61 MB/s within one MoE sweep
-- cosine minimum against the C engine: 0.985744, layer 71
-- trained / frozen: 590 MB adapter (147 M parameters) / 2.78 T base
+1024-token step: about 7.4 h, the mean of the 7.26, 7.62 and 7.37 h intervals between the first four steps.
+
+Step 1, forward / backward: 3 h 11 m 34 s / 3 h 48 m 07 s.
+
+Resident set: 4.0-4.7 GB, swap in use.
+
+Read throughput: 110 MB/s aggregate, 61 MB/s within one MoE sweep.
+
+Cosine minimum against the C engine: 0.985744, layer 71.
+
+Trained / frozen: 590 MB adapter (147 M parameters) / 2.78 T base.
 
 Turkish, English and Chinese versions of one paragraph share experts at Jaccard 0.35-0.39, about the same as two halves of one text (0.34-0.37); prose against Python is 0.20-0.21, so subject matters more than language. Consecutive tokens' expert sets have Jaccard 0.258 (0.009 for random pairs) and a 128-expert LRU hits 72 % when decoding, but a training batch reads the union, about 85 % of experts at 1024 tokens (layers 0-12, an upper bound), so an expert cache buys little for a training batch.
 
