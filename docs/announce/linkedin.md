@@ -1,7 +1,7 @@
 # LinkedIn
 
 **Written** 8 September 2026, revised 10 September 2026.
-**Status:** Turkish version posted on 10 September 2026: https://lnkd.in/p/dgXWCrAv — the exact text is under "Gönderilen sürüm" at the end of this file, in the author's own words; the drafts above are kept as written. English version not posted (the author's network is Turkish).
+**Status:** Turkish version posted on 10 September 2026: https://lnkd.in/p/dEtx7CeT — the exact text is under "Gönderilen sürüm" at the end of this file, in the author's own words; the drafts above are kept as written. English version not posted (the author's network is Turkish).
 
 Where this draft and [`../numbers.md`](../numbers.md) disagree, that table names the source
 and the source settles it.
@@ -329,9 +329,12 @@ github.com/heyobi/LazyLora
 
 ---
 
-## Gönderilen sürüm (10 Eylül 2026, https://lnkd.in/p/dgXWCrAv)
+## Gönderilen sürüm (10 Eylül 2026, https://lnkd.in/p/dEtx7CeT)
 
-Yazarın kendi elden geçirdiği, LinkedIn'e giren metin. Görseller: `proof_loss_tr.png` ve
+İlk gönderi (13:0x) üç beğenideyken silinip fotoğrafla yeniden atıldı; akışta ilk görünen
+görsel makinenin fotoğrafı (`docs/figures/rig.jpg`), sonra iki kart.
+
+Yazarın kendi elden geçirdiği, LinkedIn'e giren metin. Görseller: `rig.jpg`, `proof_loss_tr.png` ve
 `main_run_tr.png`. Yapay zekâ açıklaması gönderide yok, README'nin ilk ekranında.
 
 2,78 trilyon parametreli bir model 8 GB RAM'li bir laptopta eğitilebilir mi?
