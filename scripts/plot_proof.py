@@ -168,48 +168,52 @@ def social():
 
 
 
-def main_run_card(steps_done, total=100):
+def main_run_card(steps_done, total=100, lang="tr"):
     """Square card for the main run: progress, the anatomy of one measured step, the dates."""
+    T = {
+        "tr": dict(title="Asıl koşu: 400 Türkçe talimat örneği,\n100 adım, 1024 token",
+                   sub="9 Eylül 2026 12:53'te başladı · ölçülen tempoyla 9-11 Ekim'de bitiyor",
+                   prog="ilerleme  {d}/{t} adım", anat="bir adımın anatomisi (1. adım, ölçüldü)",
+                   fwd="ileri geçiş · 93 katman\n3 sa 11 dk", bwd="geri geçiş · 93 katman\n3 sa 48 dk",
+                   cap="toplam 6 sa 59 dk · ortalama adım yaklaşık 7,4 sa (ilk dört adım) · 93 katman her adımda iki kez okunuyor",
+                   stats=[("110 MB/s", "ölçülen okuma hızı"), ("4,0-4,7 GB", "yerleşik bellek"), ("590 MB", "eğitilen adaptör"), ("2,78 T", "donuk parametre")],
+                   vh="Doğrulama",
+                   vt="İleri geçiş, bağımsız bir C implementasyonuyla 93 katmanın hepsinde karşılaştırıldı\n(kosinüs ≥ 0,9857). Gradyanlar sonlu farkla sınandı. Karşılaştırma kaydı ve\nyönlendirme izleri depoda; motor her push'ta GitHub'ın makinesinde model olmadan koşuyor.",
+                   foot="Kaynak: evidence/forward_loss_main.jsonl, run_manifest.json · github.com/heyobi/LazyLora"),
+        "en": dict(title="The main run: 400 Turkish instruction\nexamples, 100 steps, 1024 tokens",
+                   sub="Started 9 September 2026, 12:53 · ends 9-11 October at the measured pace",
+                   prog="progress  {d}/{t} steps", anat="anatomy of one step (step 1, measured)",
+                   fwd="forward · 93 layers\n3 h 11 m", bwd="backward · 93 layers\n3 h 48 m",
+                   cap="6 h 59 m in total · about 7.4 h per step (first four steps) · 93 layers read from disk twice per step",
+                   stats=[("110 MB/s", "measured read rate"), ("4.0-4.7 GB", "resident set"), ("590 MB", "adapter trained"), ("2.78 T", "frozen parameters")],
+                   vh="Verification",
+                   vt="Forward pass compared against an independent C implementation on all 93 layers\n(cosine ≥ 0.9857); gradients checked by finite differences. The comparison log and the\nrouting traces are in the repository; the engine runs on GitHub's runners on every push.",
+                   foot="Source: evidence/forward_loss_main.jsonl, run_manifest.json · github.com/heyobi/LazyLora"),
+    }[lang]
     fig = plt.figure(figsize=(6, 6), dpi=200, facecolor=BG)
-    fig.text(0.07, 0.955, "Asıl koşu: 400 Türkçe talimat örneği,\n100 adım, 1024 token", color=FG,
-             fontsize=15, fontweight="bold", va="top", linespacing=1.35)
-    fig.text(0.07, 0.835, "9 Eylül 2026 12:53'te başladı · ölçülen tempoyla 9-11 Ekim'de bitiyor",
-             color=MUTED, fontsize=8.3, va="top")
-
-    # progress
+    fig.text(0.07, 0.955, T["title"], color=FG, fontsize=15, fontweight="bold", va="top", linespacing=1.35)
+    fig.text(0.07, 0.835, T["sub"], color=MUTED, fontsize=8.3, va="top")
     ax = fig.add_axes([0.07, 0.70, 0.86, 0.06], facecolor=BG); ax.axis("off")
     ax.barh(0, total, color=GRID, height=0.6); ax.barh(0, steps_done, color=CA, height=0.6)
     ax.set_xlim(0, total); ax.set_ylim(-0.6, 0.6)
-    fig.text(0.07, 0.775, f"ilerleme  {steps_done}/{total} adım", color=FG, fontsize=10.5, fontweight="bold")
-
-    # one step, measured (step 1 of the main run)
-    fig.text(0.07, 0.63, "bir adımın anatomisi (1. adım, ölçüldü)", color=FG, fontsize=10.5, fontweight="bold")
+    fig.text(0.07, 0.775, T["prog"].format(d=steps_done, t=total), color=FG, fontsize=10.5, fontweight="bold")
+    fig.text(0.07, 0.63, T["anat"], color=FG, fontsize=10.5, fontweight="bold")
     ax2 = fig.add_axes([0.07, 0.535, 0.86, 0.07], facecolor=BG); ax2.axis("off")
     fwd, bwd = 3 + 11.5 / 60, 3 + 48.1 / 60
-    ax2.barh(0, fwd, color=CA, height=0.7)
-    ax2.barh(0, bwd, left=fwd, color=CB, height=0.7)
+    ax2.barh(0, fwd, color=CA, height=0.7); ax2.barh(0, bwd, left=fwd, color=CB, height=0.7)
     ax2.set_xlim(0, fwd + bwd); ax2.set_ylim(-0.6, 0.6)
-    ax2.text(fwd / 2, 0, "ileri geçiş · 93 katman\n3 sa 11 dk", ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
-    ax2.text(fwd + bwd / 2, 0, "geri geçiş · 93 katman\n3 sa 48 dk", ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
-    fig.text(0.07, 0.49, "toplam 6 sa 59 dk · ortalama adım yaklaşık 7,4 sa (ilk dört adım) · 93 katman her adımda iki kez okunuyor",
-             color=MUTED, fontsize=7.8)
-
+    ax2.text(fwd / 2, 0, T["fwd"], ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
+    ax2.text(fwd + bwd / 2, 0, T["bwd"], ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
+    fig.text(0.07, 0.49, T["cap"], color=MUTED, fontsize=7.6)
     fig.add_artist(plt.Line2D([0.07, 0.93], [0.42, 0.42], color=GRID, lw=1.2))
-    stats = [("110 MB/s", "ölçülen okuma hızı"), ("4,0-4,7 GB", "yerleşik bellek"),
-             ("590 MB", "eğitilen adaptör"), ("2,78 T", "donuk parametre")]
-    for i, (big, small) in enumerate(stats):
+    for i, (big, small) in enumerate(T["stats"]):
         x = 0.085 + i * 0.222
         fig.text(x, 0.35, big, color=FG, fontsize=13.5, fontweight="bold")
         fig.text(x, 0.31, small, color=MUTED, fontsize=8.2)
-
-    fig.text(0.07, 0.215, "Doğrulama", color=FG, fontsize=10.5, fontweight="bold")
-    fig.text(0.07, 0.19, "İleri geçiş, bağımsız bir C implementasyonuyla 93 katmanın hepsinde karşılaştırıldı\n"
-                         "(kosinüs ≥ 0,9857). Gradyanlar sonlu farkla sınandı. Karşılaştırma kaydı ve\n"
-                         "yönlendirme izleri depoda; motor her push'ta GitHub'ın makinesinde model olmadan koşuyor.",
-             color=MUTED, fontsize=8.3, va="top", linespacing=1.5)
-    fig.text(0.07, 0.04, "Kaynak: evidence/forward_loss_main.jsonl, run_manifest.json · github.com/heyobi/LazyLora",
-             color=MUTED, fontsize=7.1)
-    p = os.path.join(OUT, "main_run_tr.png")
+    fig.text(0.07, 0.215, T["vh"], color=FG, fontsize=10.5, fontweight="bold")
+    fig.text(0.07, 0.19, T["vt"], color=MUTED, fontsize=8.1, va="top", linespacing=1.5)
+    fig.text(0.07, 0.04, T["foot"], color=MUTED, fontsize=7.1)
+    p = os.path.join(OUT, f"main_run_{lang}.png")
     fig.savefig(p, facecolor=BG); plt.close(fig); return p
 
 
@@ -217,5 +221,5 @@ if __name__ == "__main__":
     print(card("tr")); print(card("en")); wide(); social()
     import sys as _s
     _n = int(_s.argv[1]) if len(_s.argv) > 1 else 3
-    print(main_run_card(_n))
+    print(main_run_card(_n, lang="tr")); print(main_run_card(_n, lang="en"))
     print(os.path.join(OUT, "proof_loss_wide.png")); print(os.path.join(OUT, "social_preview.png"))
