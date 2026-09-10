@@ -562,7 +562,7 @@ last line of `evidence/forward_loss_main.jsonl` is the main run's step 1 at Unix
 11 492 s — the 3 h 11 m 34 s of `Bulgular.md` §18.1, to within the seconds between process
 launch and the trainer's first line. The backward half finishes after the last line either
 file holds and is timed from the run's terminal output. At that rate 100 steps is about 29
-days at step 1's pace; the cadence over the first three steps is 7.44 h, so about 31 days,
+days at step 1's pace; the cadence over the first three steps is about 7.4 h, so about 31 days,
 finishing around 9-11 October 2026. An earlier 256-token step took 4 h 31 m at
 6.24 GB peak RSS (`DEVAM.md` §17), which is the highest resident set this engine has ever
 recorded; the main run sits at 4.0–4.7 GB. The five-step proof run of 8–9 September used

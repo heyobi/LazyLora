@@ -4,11 +4,11 @@ needs 10 sitewide karma to comment and at least 5 comment karma earned inside r/
 to submit (rule of 24 April 2026); without that AutoModerator removes the post at once.
 Text post, link in the body, flair Discussion, Monday to Wednesday 16:00-17:30 Turkey time,
 then four hours at the keyboard. Re-snapshot evidence/forward_loss_main.jsonl first so the
-7.44 h cadence is derivable from the bundle.
+about 7.4 h cadence is derivable from the bundle.
 
 ## Title options
 
-1. **Recommended.** `LoRA on Kimi K3 (2.78 T MoE) from a USB hard disk on a 7.6 GB laptop: 7.44 h a step, logs in repo`
+1. **Recommended.** `LoRA on Kimi K3 (2.78 T MoE) from a USB hard disk on a 7.6 GB laptop: about 7.4 h a step, logs in repo`
    Why: model, disk, RAM and cost in one line, so nobody can read it as a speed claim, and "logs in repo" is what this audience opens first.
 2. `Out-of-core LoRA on a 2.78 T MoE in 7.6 GB of RAM, all 93 layers checked against kimi-k3-in-c`
 
@@ -20,7 +20,7 @@ The one-minute check is `evidence/cmp93_en34_2026-09-06.log`, my forward pass ag
 
 | | |
 |---|---|
-| 1024-token step | 7.44 h, mean of 7.26 h and 7.62 h |
+| 1024-token step | 7.42 h, mean of 7.26 h, 7.62 h, 7.37 h |
 | Step 1, forward / backward | 3 h 11 m 34 s / 3 h 48 m 07 s |
 | Resident set | 4.0-4.7 GB, swap in use |
 | Read throughput | 110 MB/s aggregate, 61 MB/s per MoE sweep |
@@ -50,7 +50,7 @@ The one-minute check is evidence/cmp93_en34_2026-09-06.log: my forward pass agai
 
 The numbers, all from the logs in the repo:
 
-- 1024-token step: 7.44 h, the mean of 7.26 h and 7.62 h between the first three steps
+- 1024-token step: about 7.4 h, the mean of the 7.26 h, 7.62 h, 7.37 h intervals between the first 4 steps
 - step 1, forward / backward: 3 h 11 m 34 s / 3 h 48 m 07 s
 - resident set: 4.0-4.7 GB, swap in use
 - read throughput: 110 MB/s aggregate, 61 MB/s within one MoE sweep

@@ -56,3 +56,6 @@
 {"step": 4, "loss": 0.193009, "perplexity": 1.2129, "time": 1788920911}
 {"step": 5, "loss": 0.156585, "perplexity": 1.1695, "time": 1788941004}
 {"step": 1, "loss": 0.909084, "perplexity": 2.4820, "time": 1788959106}
+{"step": 2, "loss": 0.874447, "perplexity": 2.3975, "time": 1788985254}
+{"step": 3, "loss": 0.936201, "perplexity": 2.5503, "time": 1789012669}
+{"step": 4, "loss": 0.470597, "perplexity": 1.6009, "time": 1789039189}

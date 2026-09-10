@@ -62,7 +62,7 @@ month ago by someone else, and gradient descent through it is the part that is n
 > cross-implementation comparison runs in CI on every push instead of only for whoever
 > clones two repositories.
 >
-> Cost: 7.44 h per 1024-token step — the mean of the two intervals between the run's first
+> Cost: about 7.4 h per 1024-token step — the mean of the two intervals between the run's first
 > three steps, 7.26 h and 7.62 h. Step 1 measured on its own was 6 h 59 m, forward 3 h 11 m
 > and backward 3 h 48 m. Resident set 4.0-4.7 GB plus about 2.4 GB of swap. Measured read
 > throughput 110 MB/s aggregate across the USB disk and the NVMe trunk — 3.22 TB through

@@ -15,7 +15,7 @@ yazıldı, hiçbiri yayınlanmadı.
 örneği → 154 paket dizi ≤1024 token), 100 adım (0.65 epoch), lr 5e-4 tepe, warmup 5,
 kosinüs, istem maskeli, her 5 adımda checkpoint
 (`/mnt/nvme/lazylora/checkpoints/lazy_lora_step_NNNNN.pt`, son 3 tutulur). **Şu an adım
-3/100.** Ölçülen tempo **7,44 sa/adım** (ilk üç adımın aralıkları 7,26 ve 7,62 sa), yani
+3/100.** Ölçülen tempo **yaklaşık 7,4 sa/adım** (ilk üç adımın aralıkları 7,26 ve 7,62 sa), yani
 ~31 gün; bitiş **9-11 Ekim 2026**. RSS 4,0-4,7 GB, takas da kullanımda. Bekçi
 (`scripts/watchdog.py`, systemd `lazylora-watchdog.timer`) 15 dk'da bir telefona ilerleme
 gönderir, süreç ölürse checkpoint'ten devam ettirir, USB disk düşerse yeniden bağlar.

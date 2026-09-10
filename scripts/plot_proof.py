@@ -191,7 +191,7 @@ def main_run_card(steps_done, total=100):
     ax2.set_xlim(0, fwd + bwd); ax2.set_ylim(-0.6, 0.6)
     ax2.text(fwd / 2, 0, "ileri geçiş · 93 katman\n3 sa 11 dk", ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
     ax2.text(fwd + bwd / 2, 0, "geri geçiş · 93 katman\n3 sa 48 dk", ha="center", va="center", color=BG, fontsize=8.5, fontweight="bold")
-    fig.text(0.07, 0.49, "toplam 6 sa 59 dk · ortalama adım 7,44 sa (ilk üç adım) · 93 katman her adımda iki kez okunuyor",
+    fig.text(0.07, 0.49, "toplam 6 sa 59 dk · ortalama adım yaklaşık 7,4 sa (ilk dört adım) · 93 katman her adımda iki kez okunuyor",
              color=MUTED, fontsize=7.8)
 
     fig.add_artist(plt.Line2D([0.07, 0.93], [0.42, 0.42], color=GRID, lw=1.2))

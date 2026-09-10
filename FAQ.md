@@ -152,7 +152,7 @@ Because they need a machine I do not have, and if you have one you should use th
 documented recipe for LoRA SFT of a trillion-parameter MoE is KTransformers with
 LLaMA-Factory on Kimi K2.5: 2-4 × RTX 4090, an AMX Xeon, about 2 TB of system RAM, ~45
 tok/s. This is a 2.8× larger model on roughly 260× less RAM with no usable GPU — and it pays
-about **7.44 hours per step** for that, which belongs in the same sentence as the ratio, or
+about **about 7.4 hours per step** for that, which belongs in the same sentence as the ratio, or
 the ratio reads as a speed claim. It is not one.
 
 If the question is "why not Colibri, WARP or BigMoeOnEdge", the answer is shorter: they are
@@ -185,7 +185,7 @@ Double-buffering the 17.5 MB expert reads could recover at most a tenth of the s
 For production fine-tuning, yes — entirely useless, and nothing here argues otherwise. What
 it buys is that the floor for touching a model this size becomes a laptop and patience
 rather than a cluster, and that the cost is now a measured number instead of a guess: the
-step is **7.44 hours**, the mean of the two intervals between steps 1 and 3 of the main run
+step is **about 7.4 hours**, the mean of the two intervals between steps 1 and 3 of the main run
 (7.26 h and 7.62 h). The step is bandwidth-bound — 14.5 GB read per MoE layer at 1024
 tokens — and the bandwidth is not being used well: aggregate over the run's first eight
 hours is 110 MB/s across both devices (3.22 TB through `read()`), while inside a single MoE
@@ -237,7 +237,7 @@ On Turkish: unknown, and that is the honest state — **no evaluation result exi
 metric is bits per byte on a 2048-token slice of Turkish news published after the model's
 release, baseline 0.455, success at ≤ 0.441, with English Wikipedia as a forgetting control
 (0.194, must stay ≤ 0.198); the threshold went into git 29 hours before the run started. At
-the measured 7.44 hours per step, 100 steps is about 31 days, so the number is due around
+the measured about 7.4 hours per step, 100 steps is about 31 days, so the number is due around
 **9-11 October 2026**, and my own expectation is that it may well not move: 100 optimizer
 steps at batch size 1 over roughly 51,000 trained tokens is not much signal. A negative
 result gets published as a negative result, under a title that says so.

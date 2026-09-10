@@ -146,7 +146,7 @@ $$dx = dy\,W_0 + dh\,A$$
 
 * **Uygulama:** İleri geçişte katman başına $h_{\text{latent}}$ diske yazılır (127×3584 bf16 = **0,9 MB**). Geri geçişte 7,6 GB'lık uzman okuması, 0,9 MB'lık aktivasyon okumasıyla değiştirilir.
 * **Bedeli:** Gradyanın uzmanların donmuş ağırlıkları üzerinden alt katmanlara akışı yaklaşıklanır; LoRA'nın kendi gradyanları **tam kalır**. Yanlılık derinlikle birikir, yani en alt katmanların adaptörleri daha az doğru eğitilir.
-* **Kazanç (eski makineye ait projeksiyon):** adım süresi ~13,4 saatten ~7,7 saate (%43 azalma). **Bu sayı iki kez eskimiştir** — hem mekanik diskli WSL makinesine aittir, hem de yukarıdaki `6bfa478` öncesine. Bu makinede ölçülen adım temposu, asıl koşunun 1-3. adımları arasında **7,44 saattir** (aralıklar 7,26 sa ve 7,62 sa). Sık alıntılanan **6 sa 59 dk 41 sn** yalnızca 1. adımın kendi ölçümüdür (ileri 3 sa 11 dk 34 sn, geri 3 sa 48 dk 07 sn; DEVAM.md "ŞU AN") ve üç adımlık tempo yerine kullanılamaz.
+* **Kazanç (eski makineye ait projeksiyon):** adım süresi ~13,4 saatten ~7,7 saate (%43 azalma). **Bu sayı iki kez eskimiştir** — hem mekanik diskli WSL makinesine aittir, hem de yukarıdaki `6bfa478` öncesine. Bu makinede ölçülen adım temposu, asıl koşunun 1-3. adımları arasında **yaklaşık 7,4 saattir** (aralıklar 7,26 sa ve 7,62 sa). Sık alıntılanan **6 sa 59 dk 41 sn** yalnızca 1. adımın kendi ölçümüdür (ileri 3 sa 11 dk 34 sn, geri 3 sa 48 dk 07 sn; DEVAM.md "ŞU AN") ve üç adımlık tempo yerine kullanılamaz.
 
 ---
 
@@ -156,7 +156,7 @@ Aşağıdaki dört aşama, model indikten sonra sırayla denenmek üzere yazılm
 
 | Plandaki aşama | Bugünkü durum |
 |---|---|
-| **Aşama 1** — Türkçe instruction eğitimi | **Koşuyor.** 400 Dolly-tr örneği, 100 adım; 9 Eylül 2026 12:53'te başladı, ölçülen adım temposuyla (~7,44 sa) yaklaşık 31 günde, **9-11 Ekim** dolaylarında biter. Plandaki "2 epok" değil, bir epoğun altında. |
+| **Aşama 1** — Türkçe instruction eğitimi | **Koşuyor.** 400 Dolly-tr örneği, 100 adım; 9 Eylül 2026 12:53'te başladı, ölçülen adım temposuyla (~yaklaşık 7,4 sa) yaklaşık 31 günde, **9-11 Ekim** dolaylarında biter. Plandaki "2 epok" değil, bir epoğun altında. |
 | **Aşama 2** — `merge_weights.py` ile birleştirme | **Yapılmadı; betik yok.** Neden yazıldığından zor olduğu 6. fikrin Durum satırındadır. |
 | **Aşama 3** — Ağaç spekülasyonu ile hızlı sohbet | **Bırakıldı.** Proje çıkarımdan eğitime kaydı; kodlar `docs/attic/`'tedir. |
 | **Aşama 4** — ReLoRA döngüsü | **Denenmedi**, ve Aşama 2'ye bağlıdır. |

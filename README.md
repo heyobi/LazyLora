@@ -7,7 +7,7 @@
 layer at a time. The forward pass matches an independent C implementation on all 93 layers
 (cosine 0.9857 or better; the log is in [`evidence/`](evidence/)), the gradients pass
 finite-difference checks, and the engine runs end to end on GitHub's runners on every push
-with no model. A step takes 7.44 h; the 100-step run ends 9-11 October 2026 and is scored
+with no model. A step takes about 7.4 h; the 100-step run ends 9-11 October 2026 and is scored
 against a threshold committed before it started. Five expert-routing traces are in the
 repository, and the finding worth reading first is that expert locality holds per token but
 collapses across a training batch. Sceptical: start with [FAQ.md](FAQ.md). Want to run it:
@@ -95,7 +95,7 @@ measured intervals). Every row of that table is a line of
 [`evidence/forward_loss_proof.jsonl`](evidence/forward_loss_proof.jsonl), losses and Unix
 timestamps as the trainer wrote them. Those are the step times of **this** run, on
 sequences of about 541 tokens each; the main run's full 1024-token step is longer,
-step 1 measured 6 h 59 m 41 s on its own, and the run's measured cadence over its first three steps is 7.44 h (intervals 7.26 h and 7.62 h). Those two intervals are **not** derivable from the bundle: [`evidence/forward_loss_main.jsonl`](evidence/forward_loss_main.jsonl) is a snapshot that stops at step 1, so the cadence is read from the live trainer log on this machine and is the author's word until the snapshot is re-cut. At that pace 100 steps is about 31 days, finishing around 9-11 October 2026. The proof run's pace must not be quoted for either. The process held a
+step 1 measured 6 h 59 m 41 s on its own, and the run's measured cadence over its first three steps is about 7.4 h (intervals 7.26 h and 7.62 h). Those two intervals are **not** derivable from the bundle: [`evidence/forward_loss_main.jsonl`](evidence/forward_loss_main.jsonl) is a snapshot that stops at step 1, so the cadence is read from the live trainer log on this machine and is the author's word until the snapshot is re-cut. At that pace 100 steps is about 31 days, finishing around 9-11 October 2026. The proof run's pace must not be quoted for either. The process held a
 resident set of 4.5–4.7 GB for 27 hours on a 7.6 GB machine. The USB bridge reset roughly
 45 times an hour under load; no read failed permanently. The run was stopped after five
 steps because the remaining steps would have added nothing. Details:
@@ -595,7 +595,7 @@ about 260 of the 400 examples are seen once, over roughly 51k of the 78k tokens.
 5e-4 peak, cosine schedule, warmup 5, prompt tokens masked, checkpoint every 5 steps with the
 last three kept.
 
-At **7.44 h** per step — the mean of the two step-to-step intervals measured so far in this
+At **about 7.4 h** per step — the mean of the two step-to-step intervals measured so far in this
 run, 7.26 h and 7.62 h — the run needs about **31 days**, currently landing around **9–11
 October 2026**, after which the evaluation above is run. The date moves with disk health;
 treat it as a projection from three logged steps, not a commitment, and read the live

@@ -35,8 +35,8 @@ sıkıştırdım ve aynı dizileri tur tur verdim: 0,909 → 0,500 → 0,157 ve 
 Adaptör beş örneği ezberledi. Ezber tam olarak bu testten beklenen şey: mekanizmanın
 uçtan uca doğru çalıştığını gösteriyor, modelin bir konuda iyileştiğini değil.
 
-Rakamlar: 1024 token'lık bir adım 7,44 saat — asıl koşunun ilk üç adımı arasındaki iki
-aralığın ortalaması (7,26 sa ve 7,62 sa). Tek başına ölçülen 1. adım 6 saat 59 dakikaydı
+Rakamlar: 1024 token'lık bir adım yaklaşık 7,4 saat — asıl koşunun ilk üç adımı arasındaki iki
+aralığın ortalaması (7,26, 7,62, 7,37 sa). Tek başına ölçülen 1. adım 6 saat 59 dakikaydı
 (ileri geçiş 3 sa 11 dk, geri geçiş 3 sa 48 dk); kanıt koşusunun daha kısa dizilerinde adım
 5,5-5,8 saatti. Üçü aynı sayı değil. Kanıt koşusunda bellek 27 saat boyunca 4,5-4,7 GB'de kaldı — karttaki
 rakam bu; asıl koşuda 4,0-4,7 GB, üstüne ~2,4 GB takas alanı. Hiçbiri tepe değeri değil,
@@ -99,7 +99,7 @@ sequences, the same sequences fed pass after pass: 0.909 → 0.500 → 0.157 and
 should produce — it shows the mechanism is correct end to end, not that the model became
 better at anything.
 
-The numbers: a 1024-token step takes 7.44 hours — the mean of the two intervals between the
+The numbers: a 1024-token step takes about 7.4 hours — the mean of the two intervals between the
 main run's first three steps, 7.26 h and 7.62 h. Step 1 measured on its own was 6 hours
 59 minutes (forward 3 h 11 m, backward 3 h 48 m); on the proof run's shorter sequences a
 step was 5.5-5.8 hours, and the three are not interchangeable. Resident memory stayed at 4.5-4.7 GB for the 27-hour proof run on a
@@ -172,8 +172,8 @@ Bu hafta döngünün doğru çalıştığını gördüm. Aynı iki diziyi tur tu
 ileri geçiş, geri geçiş ve AdamW zincirinin uçtan uca doğru çalıştığını gösteriyor,
 modelin bir konuda iyileştiğini değil.
 
-Rakamlar: 1024 token'lık bir adım 7,44 saat — asıl koşunun ilk üç adımı arasındaki iki
-aralığın ortalaması (7,26 sa ve 7,62 sa). Tek başına ölçülen 1. adım 6 saat 59 dakikaydı:
+Rakamlar: 1024 token'lık bir adım yaklaşık 7,4 saat — asıl koşunun ilk üç adımı arasındaki iki
+aralığın ortalaması (7,26, 7,62, 7,37 sa). Tek başına ölçülen 1. adım 6 saat 59 dakikaydı:
 ileri geçiş 3 sa 11 dk, geri geçiş 3 sa 48 dk. Kanıt koşusunun daha kısa dizilerinde adım
 5,5-5,8 saatti; üçü aynı sayı değil. Bellek: kanıt koşusunda 27 saat boyunca 4,5-4,7 GB
 — karttaki rakam bu — asıl koşuda 4,0-4,7 GB, üstüne ~2,4 GB takas alanı. Hiçbiri tepe
@@ -218,7 +218,7 @@ This week I watched the loop work. Two fixed sequences, pass after pass: 0.909 �
 test should show — forward, backward and AdamW are correct end to end — and it is not the
 model getting better at anything.
 
-The numbers: a 1024-token step takes 7.44 hours, the mean of the two intervals between the
+The numbers: a 1024-token step takes about 7.4 hours, the mean of the two intervals between the
 main run's first three steps (7.26 h and 7.62 h). Step 1 measured on its own was 6 hours
 59 minutes: forward 3 h 11 m, backward 3 h 48 m. On the proof run's shorter sequences a step
 was 5.5-5.8 hours; the three are not interchangeable. Memory: the proof run held 4.5-4.7 GB
@@ -256,7 +256,7 @@ Code, measurements and the raw logs: github.com/heyobi/LazyLora
 
 Türkçe:
 
-> 1,56 TB'lık bir modelin ağırlıkları USB diskte, RAM 7,6 GB, bir adım 7,44 saat — ve
+> 1,56 TB'lık bir modelin ağırlıkları USB diskte, RAM 7,6 GB, bir adım yaklaşık 7,4 saat — ve
 > adaptörün loss'u 0,909'dan 0,157'ye düştü. Modelin 2,78 trilyon parametresine hiç
 > dokunulmadı.
 
@@ -285,7 +285,7 @@ Bu hafta döngünün gerçekten çalıştığını gördüm. Aynı iki diziyi tu
 
 En çok önemsediğim kısım hız değil, doğrulama. İleri geçişi bağımsız bir C implementasyonuna (FareedKhan-dev'in kimi-k3-in-c projesi) karşı katman katman karşılaştırıyorum: 93 katmanın hepsi kosinüs 0,9857 ve üzerinde eşleşiyor. 93 satırlık karşılaştırmanın tamamı depoda, benim seçmediğim satırlar dahil. Motor her push'ta GitHub'ın makinesinde, model olmadan, sentetik bir kopya üzerinde baştan sona koşuyor.
 
-Rakamlar: 1024 token'lık bir adım 7,44 saat, bellek 4-5 GB, disk 110 MB/s. Şu an 400 örneklik Türkçe talimat koşusu dönüyor, 9-11 Ekim civarı bitiyor. Türkçenin gerçekten iyileşip iyileşmediğini, koşu başlamadan önce git'e işlediğim bir eşikle sınayacağım. Sonuç olumsuz çıkarsa olumsuz yazacağım.
+Rakamlar: 1024 token'lık bir adım yaklaşık 7,4 saat, bellek 4-5 GB, disk 110 MB/s. Şu an 400 örneklik Türkçe talimat koşusu dönüyor, 9-11 Ekim civarı bitiyor. Türkçenin gerçekten iyileşip iyileşmediğini, koşu başlamadan önce git'e işlediğim bir eşikle sınayacağım. Sonuç olumsuz çıkarsa olumsuz yazacağım.
 
 Depo, yapay zekâ yardımıyla yazıldığını ilk ekranında söylüyor; doğrulamanın bu kadar ağır olmasının sebebi de bu.
 
@@ -301,7 +301,7 @@ This week I watched the loop actually work. The same two sequences, pass after p
 
 What I care about most is not the speed but the verification. I check the forward pass layer by layer against an independent C implementation of the same model (FareedKhan-dev's kimi-k3-in-c): all 93 layers agree at a cosine similarity of 0.9857 or better. The full 93-row comparison is in the repository, including the rows I did not choose to quote. The engine also runs end to end on GitHub's own machines on every push, on a synthetic stand-in, with no model required.
 
-The numbers: a 1024-token step takes 7.44 hours, memory stays at 4-5 GB, the disk delivers 110 MB/s. A 400-example Turkish instruction run is going now and finishes around 9-11 October. Whether the model's Turkish actually improved gets tested against a threshold I committed to git before the run started. If the result is negative, I will publish it as negative.
+The numbers: a 1024-token step takes about 7.4 hours, memory stays at 4-5 GB, the disk delivers 110 MB/s. A 400-example Turkish instruction run is going now and finishes around 9-11 October. Whether the model's Turkish actually improved gets tested against a threshold I committed to git before the run started. If the result is negative, I will publish it as negative.
 
 The README says on its first screen that the repository was written with heavy AI assistance; that is also why the verification is as heavy as it is.
 
@@ -323,7 +323,7 @@ Bu hafta döngünün doğru çalıştığını gördüm. Aynı diziyi tekrar tek
 
 Asıl uğraştığım şey doğrulama oldu. İleri geçişi bağımsız bir C implementasyonuyla 93 katmanın hepsinde karşılaştırdım; karşılaştırmanın tamamı depoda. Motor her push'ta GitHub'ın makinesinde, model olmadan çalışıyor.
 
-Bir eğitim adımı 7,44 saat sürüyor. 400 örneklik Türkçe koşu 3/100 adımda, 9-11 Ekim civarı bitiyor.
+Bir eğitim adımı yaklaşık 7,4 saat sürüyor. 400 örneklik Türkçe koşu 3/100 adımda, 9-11 Ekim civarı bitiyor.
 
 github.com/heyobi/LazyLora
 

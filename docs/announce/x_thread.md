@@ -110,7 +110,7 @@ frozen weights with a zero adapter, 27 h 38 m apart. The full answer is in
 ## 9/11  (262 chars)
 
 ```
-What it costs: 7.44 h per 1024-token step, the mean of the intervals between the run's first three steps. Resident set 4.0-4.7 GB plus ~2.4 GB of swap; the highest peak recorded anywhere was 6.24 GB. Measured read 110 MB/s across the USB disk and the NVMe trunk.
+What it costs: about 7.4 h per 1024-token step, the mean of the intervals between the run's first three steps. Resident set 4.0-4.7 GB plus ~2.4 GB of swap; the highest peak recorded anywhere was 6.24 GB. Measured read 110 MB/s across the USB disk and the NVMe trunk.
 ```
 
 *Attach:* `docs/figures/run_terminal.svg` rendered to PNG. It is main-run step 1 and
@@ -118,7 +118,7 @@ nothing else now, with a caption inside the image saying that the start, the for
 and the backward end are measured and the layer lines between them are interpolated at the
 measured pace, so it can be attached as-is.
 
-The 7.44 h is the main run at 1024 tokens: the mean of the two intervals between its first
+The about 7.4 h is the main run at 1024 tokens: the mean of the two intervals between its first
 three steps, 7.26 h and 7.62 h. Step 1 measured on its own was 6 h 59 m 41 s — forward
 3 h 11 m 34 s, backward 3 h 48 m 07 s — and that is one step, not the step time; it is also
 what `run_terminal.svg` shows, so the figure and the post are about different things and the

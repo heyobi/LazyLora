@@ -44,8 +44,8 @@ in this repository are marked, and say so in their own words rather than being d
 | Proof losses | A: 0.909084 → 0.500335 → 0.156585; B: 0.521090 → 0.193009 | the last five lines of `evidence/forward_loss_proof.jsonl` |
 | Proof step time | four measured intervals 20813, 19756, 20756 and 20093 s = 5.78, 5.49, 5.77 and 5.58 h, mean **5.65 h**. It applies to that run only — those two sequences held about 541 tokens each | subtraction of consecutive `time` fields in `evidence/forward_loss_proof.jsonl` |
 | Main run, step 1 | **6 h 59 m 41 s** on a full 1024-token packed sequence: forward 3 h 11 m 34 s (123.6 s/layer) + backward 3 h 48 m 07 s (147.2 s/layer) | `Bulgular.md` §18.1; `evidence/run_manifest.json` `note`. The forward is derivable from the bundle; the backward and the total are not — see the last section |
-| Main run, step **cadence** | **7.26 h and 7.62 h** between the first three logged forward passes, mean **7.44 h**. This, not the 6 h 59 m above, is the figure to use for the run as a whole: 6 h 59 m is one step measured on its own | the live `forward_loss.jsonl` in the run workspace **(off-repo)**. The snapshot committed as `evidence/forward_loss_main.jsonl` is 58 lines and stops at the main run's step 1, so **these two intervals cannot be derived from the bundle** — say so rather than pointing a reader at a file that does not contain them |
-| Main run duration | at 7.44 h a step, 100 steps is about **31 days** from 9 September 12:53, landing around **9-11 October 2026**. The spread is the honest one: 7.26 h gives 30.3 days, 7.62 h gives 31.8 days | arithmetic on the row above. Supersedes the "about 7 h, 29 days, 8-9 October" that came from step 1 alone and still appears in some documents |
+| Main run, step **cadence** | **7.26 h, 7.62 h and 7.37 h** between the first four logged forward passes, mean **7.42 h** as of step 4 (10 September 2026, 14:19); quoted in prose as "about 7.4 h" because the mean moves with every step. This, not the 6 h 59 m above, is the figure to plan with. | `evidence/forward_loss_main.jsonl`, snapshot through step 4; each interval is the difference of two `time` fields |
+| Main run duration | at about 7.4 h a step, 100 steps is about **31 days** from 9 September 12:53, landing around **9-11 October 2026**. The spread is the honest one: 7.26 h gives 30.3 days, 7.62 h gives 31.8 days | arithmetic on the row above. Supersedes the "about 7 h, 29 days, 8-9 October" that came from step 1 alone and still appears in some documents |
 | Memory | resident set 4.0-4.7 GB in the main run with swap in use; 4.5-4.7 GB held for 27 h in the proof run; **6.24 GB** on an earlier 256-token step is the highest ever recorded, not the current peak and not a peak of this run | `Bulgular.md` §18, `DEVAM.md` §17, `DEVAM.md` "ŞU AN"; the live counters **(off-repo)** |
 | Read throughput, aggregate | **measured 110 MB/s** across the USB disk (routed experts) and the NVMe trunk (non-expert weights) together: 3,219,659,335,955 bytes through the process's read counter after 8 h 06 m 57 s of the main run | `Bulgular.md` §18.1, `DEVAM.md` "ŞU AN"; the `/proc` counter **(off-repo)** |
 | Read throughput, inside one sweep | **61 MB/s** effective: 14.5 GB per MoE layer in 238 s, layers 0-12, because the reader thread idles during compute | `Bulgular.md` §16.5 |
@@ -68,7 +68,7 @@ in this repository are marked, and say so in their own words rather than being d
 Any per-step time merged across the two runs, and **"5.7 h"** in particular — it came from the
 proof run, whose two packed sequences held about 541 tokens each rather than a full 1024, so
 it may never be quoted for the main run. **"6 h 59 m" quoted as the run's step time** — that
-is step 1 measured on its own; the cadence over the first three steps is 7.44 h and the
+is step 1 measured on its own; the cadence over the first three steps is about 7.4 h and the
 duration follows from the cadence. **"29 days" and "8-9 October"**, which were derived from
 6 h 59 m and are superseded by about 31 days and 9-11 October; some documents in this
 repository still carry the old pair, and where they do, this table settles it.
@@ -158,9 +158,9 @@ survive being taken up.
   forward ends, so nothing in the bundle marks the end of a backward pass. The 3 h 48 m 07 s
   and the 6 h 59 m 41 s come from the trainer's own printed timings, repeated in
   `run_manifest.json`'s `note` field — an assertion in a file, not a subtraction.
-- *The 7.44 h cadence, not derivable either, and for a duller reason.* It needs three main-run
+- *The about 7.4 h cadence, not derivable either, and for a duller reason.* It needs three main-run
   rows and the committed snapshot has one. The bundle was assembled on 9 September and has not
-  been re-cut since. Anyone quoting 7.44 h from `evidence/` is quoting a file that does not
+  been re-cut since. Anyone quoting about 7.4 h from `evidence/` is quoting a file that does not
   contain it; the fix is to re-snapshot the log, and until that is done the number is the
   author's word.
 - *Every routing table, fully recomputable.* `evidence/traces/` holds 5,669,776 bytes of raw

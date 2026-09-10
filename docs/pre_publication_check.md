@@ -166,7 +166,7 @@ was found by a reader.
 |---|---|---|
 | "cosine ≥ 0.988, minimum at layer 72", in five documents at once | cosine 0.9857 or better across all 93 layers; lowest row **0.985744 at layer 71**; layer 72 is 0.987909, fourth lowest; worst stretch 68-72; the output row 0.999840 was always right | Publishing `evidence/cmp93_en34_2026-09-06.log` and sorting it. The old figure was the lowest of the **nine** layers spot-checked in `Bulgular.md` §17.1, not of the 93. This is the correction the evidence bundle forced, and the reason for the whole bundle: it turned a claim nobody could check into one anybody can falsify with `sort` |
 | "5.7 h per 1024-token step" | proof run 5.5-5.8 h on 1082 tokens across two sequences; main run step 1 **6 h 59 m** at 1024 tokens (forward 3 h 11 m, backward 3 h 48 m). Both attributed, never merged | Timestamp subtraction in `evidence/forward_loss_proof.jsonl` against the trainer's printed step-1 timings |
-| "about 7 h a step, 29 days, ends 8-9 October" | **7.44 h** a step — the mean of the 7.26 h and 7.62 h intervals between the main run's first three steps — so about **31 days** and around **9-11 October 2026** | Two more steps of the live run. 6 h 59 m was one step measured on its own; the cadence is what the duration follows from. Some documents still carry the old pair; `numbers.md` settles it |
+| "about 7 h a step, 29 days, ends 8-9 October" | **about 7.4 h** a step — the mean of the 7.26 h and 7.62 h intervals between the main run's first three steps — so about **31 days** and around **9-11 October 2026** | Two more steps of the live run. 6 h 59 m was one step measured on its own; the cadence is what the duration follows from. Some documents still carry the old pair; `numbers.md` settles it |
 | "ends ~3 October" / "early October" | see above; no date earlier than 9 October is defensible | the same |
 | "relative error ≤ 2e-3" for the backward pass | worst **9.1e-3**, at layer 1, in two directions whose analytic derivative is about 3e-4; 3.6e-3 on the MLA layer; ≤ 2.0e-3 elsewhere. The 9.1e-3 leads; the 3.6e-3 never stands alone as "the worst" | `DEVAM.md` §11's own table, read instead of summarised |
 | Op fixtures "match at 1e-5" | seven of eight at 1e-5 absolute / 1e-4 relative; the composite MoE block at 2e-4 absolute with cosine 1.000000, and the test hardcodes that tolerance | `lazy_lora/tests/test_reference_ops.py`, `abs_tol=2e-4` on the `moe` case; commit `588ec07` is where the tolerance was widened |
@@ -258,7 +258,7 @@ suspicious of.
 
 - **The evidence snapshot is one step behind the run.** `evidence/forward_loss_main.jsonl` is
   58 lines and stops at the main run's step 1, so the 7.26 h and 7.62 h intervals — and
-  therefore the 7.44 h step and the ~31-day duration that every document now quotes — cannot
+  therefore the about 7.4 h step and the ~31-day duration that every document now quotes — cannot
   be derived from the bundle. They are read from the live trainer log, which is not in this
   repository. Re-cutting the snapshot fixes it; until then the number is the author's word,
   and [`numbers.md`](numbers.md) marks it as such.
@@ -329,7 +329,7 @@ know how careful this project is learns more from the defect than from its absen
   written when the forward finishes and the backward runs about three hours longer; the page
   said the proof steps took "5,6-5,8 saat" where the four measured intervals are 5.78, 5.49,
   5.77 and 5.58 h, so the range is 5,5-5,8 as it is everywhere else; and it still quoted the
-  main run's step as "7 saate" after the measured cadence had become 7.44 h. **Resolved
+  main run's step as "7 saate" after the measured cadence had become about 7.4 h. **Resolved
   10 September 2026**, the day the page went live on GitHub Pages: the column now reads
   "İleri geçiş bitti" with a caption explaining why the difference of two such stamps is
   still a whole step, the four intervals are printed individually beside the 5,5-5,8 range,

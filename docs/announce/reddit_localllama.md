@@ -132,7 +132,7 @@ It proves nothing about whether the model is better at anything.
 
 | | |
 |---|---|
-| 1024-token step | **7.44 h** — the mean of the two intervals between the main run's first three steps (7.26 h and 7.62 h). Step 1 measured on its own was 6 h 59 m: forward 3 h 11 m (123 s/layer), backward 3 h 48 m (147 s/layer) |
+| 1024-token step | **about 7.4 h** — the mean of the two intervals between the main run's first three steps (7.26 h and 7.62 h). Step 1 measured on its own was 6 h 59 m: forward 3 h 11 m (123 s/layer), backward 3 h 48 m (147 s/layer) |
 | Proof run step | 5.5-5.8 h, on the shorter packed sequences above |
 | Resident set | 4.5-4.7 GB held for 27 hours in the proof run; 4.0-4.7 GB in the main run, plus about 2.4 GB of swap. Not a peak: the highest figure recorded anywhere in the project is 6.24 GB, on an earlier 256-token step |
 | Disk, aggregate | **measured 110 MB/s** across the USB disk (routed experts) and the NVMe trunk (non-expert weights): 3,219,659,335,955 bytes through `read()` in the first 8 h 07 m of the main run |
@@ -258,7 +258,7 @@ for it. That row's forward is derivable — `run_manifest.json`'s `started=17889
 against `time=1788959106` is 11492 s, 3 h 11 m 32 s, two seconds under the 3 h 11 m 34 s the
 trainer printed, the gap being process start versus log write. The backward, 3 h 48 m 07 s,
 and the 6 h 59 m 41 s total for step 1 are the trainer's own printed timings; nothing in the
-bundle confirms them. Nor does it confirm the 7.44 h I quote above as the step time: that is
+bundle confirms them. Nor does it confirm the about 7.4 h I quote above as the step time: that is
 the mean of the two intervals between the run's first three logged forward passes, 7.26 h
 and 7.62 h, read from the live trainer log rather than from the September snapshot in the
 repository. I would rather say all of that than let "do the subtraction yourself" cover more
@@ -285,7 +285,7 @@ two packages, `numpy>=1.24` and `torch>=2.3`.
 Currently running: 400 Turkish instruction examples from `atasoglu/databricks-dolly-15k-tr`
 packed into 154 sequences of at most 1024 tokens, 100 optimizer steps at batch size 1 —
 0.65 of an epoch, so about 260 of the 400 examples are seen exactly once. Started 9
-September; at the measured 7.44 h step that is about 31 days, so it lands around
+September; at the measured about 7.4 h step that is about 31 days, so it lands around
 9-11 October.
 
 Then the evaluation, which was fixed **before** training: bits per byte on a 2048-token

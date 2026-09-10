@@ -723,7 +723,7 @@ ilk değeri A'dan düşük çünkü A üzerindeki ilk güncellemeden sonra ölç
 koşusunun** adım süresi 5.5-5.8 saat (ileri ~2.8 saat, 110 s/katman; geri ~2.9 saat;
 adımlar arası ölçülen aralıklar 19756 / 20813 / 20756 / 20093 sn,
 `evidence/forward_loss_proof.jsonl` zaman damgalarından) — iki paket dizi ~541'er token
-olduğu için; asıl koşunun 1024 token'lık adımı ilk üç adımda ortalama 7,44 saat sürüyor
+olduğu için; asıl koşunun 1024 token'lık adımı ilk üç adımda ortalama yaklaşık 7,4 saat sürüyor
 (§18.1) ve zaman projeksiyonlarında o rakam kullanılır. Süreç 27 saat boyunca
 RSS 4.5-4.7 GB'de kaldı; USB köprüsü bu sürede saatte ~45 kez sıfırlandı, hiçbir okuma
 kalıcı başarısız olmadı. 16 adımın kalanı bilgi katmayacağı için koşu 5. adımdan sonra
@@ -763,7 +763,7 @@ iki paket dizi ~541'er token'dı, burada dizi tam 1024 token.
 **Tek adım değil, tempo (10 Eylül 2026 düzeltmesi).** Yukarıdaki 6 sa 59 dk 41 sn yalnızca
 1. adımın kendi ölçümüdür ve bir süre zaman projeksiyonlarında tek başına kullanıldı. Üç
 adım tamamlandığında ardışık adımlar arasında ölçülen aralıklar **7,26 sa** ve **7,62 sa**
-çıktı; üç adımlık tempo **7,44 sa**. Projeksiyonlarda kullanılması gereken rakam budur:
+çıktı; üç adımlık tempo **yaklaşık 7,4 sa**. Projeksiyonlarda kullanılması gereken rakam budur:
 100 adım bu tempoyla **~31 gün** eder, yani bitiş **9-11 Ekim 2026** dolayıdır (DEVAM
 "ŞU AN"). Aralıklar koşunun kendi ileri-loss zaman damgalarından çıkar; depodaki
 `evidence/forward_loss_main.jsonl` 9 Eylül'de alındığı için yalnız 1. adımı içerir, 2. ve
