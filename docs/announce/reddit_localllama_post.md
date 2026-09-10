@@ -1,5 +1,5 @@
 **Written** 10 September 2026.
-**Status:** not posted. Replace STEP_N with the step count on the day. The posting account
+**Status:** posted to r/LocalLLM on 10 September 2026: https://www.reddit.com/r/LocalLLM/s/wX0IHcxwvv (app-safe body, at the end of this file). Replace STEP_N with the step count on the day. The posting account
 needs 10 sitewide karma to comment and at least 5 comment karma earned inside r/LocalLLaMA
 to submit (rule of 24 April 2026); without that AutoModerator removes the post at once.
 Text post, link in the body, flair Discussion, Monday to Wednesday 16:00-17:30 Turkey time,
