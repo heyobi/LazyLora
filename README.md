@@ -2,6 +2,17 @@
 
 [![quickstart](https://github.com/heyobi/LazyLora/actions/workflows/quickstart.yml/badge.svg)](https://github.com/heyobi/LazyLora/actions/workflows/quickstart.yml)
 
+**TL;DR.** A LoRA adapter is being trained on Kimi K3, a 2.78 T Mixture-of-Experts model, on a
+2017 laptop with 7.6 GB of RAM, with the 1.56 TB checkpoint streamed from a USB hard disk one
+layer at a time. The forward pass matches an independent C implementation on all 93 layers
+(cosine 0.9857 or better; the log is in [`evidence/`](evidence/)), the gradients pass
+finite-difference checks, and the engine runs end to end on GitHub's runners on every push
+with no model. A step takes 7.44 h; the 100-step run ends 9-11 October 2026 and is scored
+against a threshold committed before it started. Five expert-routing traces are in the
+repository, and the finding worth reading first is that expert locality holds per token but
+collapses across a training batch. Sceptical: start with [FAQ.md](FAQ.md). Want to run it:
+[docs/QUICKSTART.md](docs/QUICKSTART.md).
+
 Out-of-core LoRA fine-tuning and routing measurement for **Kimi K3** — 2.78 trillion
 parameters, 93 layers, 896 routed experts per layer, MXFP4 expert weights — on one 2017
 laptop: an i7-7700HQ, 7.6 GB of RAM, a 2 GB GTX 1050, and the 1.56 TB checkpoint on a hard
@@ -524,15 +535,23 @@ outside this machine's own clock corroborates the pre-registration.** Git dates 
 the local clock and the repository was private while the threshold was written. An
 annotated tag `preregistration-2026-09-08` points at `6605306`, so GitHub records when the
 tag arrived as well as when the commit did — a second lower bound from the same account,
-not an independent witness. Note also that this repository's history was rewritten
-twice before publication, and neither pass removed an attribution. The first dropped two
-AI-session database files and the tracked bytecode that had been committed by accident.
-The second normalised twenty-eight commits that carried a placeholder author identity, and
-stripped a `Claude-Session:` line that the tool had appended to forty commit messages: it
-was one private URL, repeated identically, that resolves for one account and nobody else,
-which is precisely what this repository asks nobody else to accept. The `Co-Authored-By`
-trailers were left alone. Commit hashes quoted anywhere therefore date from after the
-second rewrite; the dates they carry are the original author dates.
+not an independent witness. The history was also rewritten twice before publication,
+neither time touching an attribution; what each pass did is recorded in
+[docs/pre_publication_check.md](docs/pre_publication_check.md). Commit hashes quoted here
+date from after the second rewrite; the dates they carry are the original author dates.
+
+### Secondary metric, declared 10 September 2026
+
+Added one day into the run and a month before its evaluation, so that it is on record
+before any number exists: the mean masked answer loss on 100 held-out Dolly-tr examples,
+base model against adapter. The examples pass the same filter as the 400 training examples
+and are disjoint from them (`scripts/build_heldout_set.py`, seed 1; the manifest with both
+files' hashes is `evidence/dolly_tr_heldout_100_manifest.json`, sha256 of the held-out file
+`ab2286d1dcf2baa5…`). It measures what the run actually optimises, instruction-following
+loss on unseen examples from the training distribution, and it is added because 51,000
+trained tokens of translated instruction data may well not move news bits per byte. It is
+secondary: it cannot replace the primary threshold, and a win here with a miss on the
+primary is reported as exactly that.
 
 ### If the result is negative
 
@@ -546,7 +565,7 @@ A pre-registered negative result is a better artefact than a marginal positive o
 is rarer. It is publishable as-is:
 
 - **Title it plainly.** "…and it did not move the metric" in the title, not in paragraph
-  six. Reddit and HN reward this and punish the alternative.
+  six.
 - **Publish the table** — news, TR wiki, EN wiki, before and after — and the diagnostics:
   loss curve over 100 steps, per-layer LoRA gradient norms, and the before/after routing
   trace comparison the protocol already calls for ([DEVAM.md](DEVAM.md) §16, item 5). "Did

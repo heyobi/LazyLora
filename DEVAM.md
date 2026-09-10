@@ -467,6 +467,14 @@ Wikipedia dilimleri ezber düzeyinde; birincil metrik haber dilimi (bit/bayt). *
 `datasets/dolly_tr_400.jsonl` (Dolly-15k-tr, CC BY-SA 3.0), 1024 token paketli, istem maskeli.
 Kanıt koşusu: `run_proof.sh` (5 örnek, 16 adım, lr 1e-3, warmup 2).
 
+
+**İkincil ölçüt (10 Eylül 2026'da eklendi, değerlendirmeden bir ay önce):** 400 eğitim
+örneğiyle aynı süzgeçten geçen ama onlarla kesişmeyen 100 Dolly-tr örneğinde ortalama
+maskeli cevap loss'u, temel model ↔ adaptör (`scripts/build_heldout_set.py`, seed 1;
+`datasets/dolly_tr_heldout_100.jsonl`, sha256 `ab2286d1dcf2baa5…`, manifest `evidence/`
+altında). Koşunun gerçekten optimize ettiği şeyi ölçer. Birincil eşiğin yerine geçmez;
+burada kazanıp birincilde kaybetmek aynen öyle yazılır.
+
 ## 18. GÖZETİMSİZ KOŞU TAKİBİ (8 Eylül 2026)
 
 `scripts/watchdog.py`, systemd kullanıcı zamanlayıcısı `lazylora-watchdog.timer` ile her

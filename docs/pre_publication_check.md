@@ -343,6 +343,33 @@ know how careful this project is learns more from the defect than from its absen
   publication:** `share_post.md` was merged into `linkedin.md` and deleted. There is now one
   copy.
 
+- **The cosine dip at layers 68-72 is unexplained.** `evidence/cmp93_en34_2026-09-06.log`
+  shows the maximum absolute difference jumping to 5.26 at layer 71 against 0.21 at layer 72
+  while the cosine falls to 0.985744 and recovers by the output. The likeliest cause is a
+  top-16 routing flip on one token, where the two engines pick a different sixteenth expert
+  from near-tied scores; a bf16 accumulation difference is the other candidate. The check
+  that settles it — per token, per layer, how many of the 16 chosen experts differ between
+  the two engines at layers 68-72 — needs the C dump and a forward pass, so it waits for the
+  machine. Until then the number is reported, not explained. (Raised by an external review,
+  10 September 2026.)
+- **The run reads about 3 TB per step from a consumer hard disk, ~295 TB over 100 steps,**
+  far beyond any published workload rating for such a drive. Added 10 September: the
+  watchdog alerts on any increase of the SMART reallocated, pending, uncorrectable and CRC
+  counters (all 0 today) and copies every new checkpoint to the root SSD, a different
+  physical disk, keeping the two newest. Not done: a powered USB hub for the enclosure,
+  which may be behind the hourly bridge resets; that is a hardware change for the author.
+- **History rewrites, for the record.** Before publication the history was rewritten twice.
+  The first pass dropped two AI-session database files and 91 tracked bytecode objects. The
+  second normalised twenty-eight commits that carried a placeholder author identity and
+  stripped a `Claude-Session:` line the tool had appended to forty commit messages — one
+  private URL, repeated identically, resolving for one account only. Neither pass touched a
+  `Co-Authored-By` trailer. Commit hashes quoted in the documents date from after the second
+  rewrite; the dates they carry are the original author dates.
+- **A secondary evaluation metric was declared on 10 September 2026** (README, "Secondary
+  metric"): masked answer loss on 100 held-out Dolly-tr examples, manifest in `evidence/`.
+  Declared a month before the evaluation and before any number exists; it is secondary and
+  the primary threshold stands unchanged.
+
 ### The standing risk
 
 The list above is what is known to be wrong. The list of what is wrong is longer, because

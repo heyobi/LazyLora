@@ -170,6 +170,18 @@ with them on inference, and the related-work table says so.
 
 ### 9. "Seven hours a step is useless."
 
+Two follow-ups this invites, with the measurements. *Why not more tokens per step, if the
+cost is per sweep?* Because the sweep law stops at about 1024 tokens on this CPU: the 6
+September profiles over layers 0-11 took 1602 s at 1024 tokens and 3108 s at 2048, while
+bytes read grew only from 176 GB to 197 GB. Twice the tokens, 1.94 times the time, 12 %
+more disk: beyond 1024 the step is compute-bound, so 4096-token steps would not see more
+data per hour here. *Why not prefetch, since the disk is rated 115 MB/s and a sweep gets
+61?* The 61 MB/s is one layer sweep in the layers 0-12 profile; over the whole step the
+process reads 110 MB/s aggregate, of which the NVMe trunk is about 8 MB/s (218 GB per step
+over 26,784 s), so the USB disk is already at about 102 MB/s, 89 % of its benchmark.
+Double-buffering the 17.5 MB expert reads could recover at most a tenth of the step.
+
+
 For production fine-tuning, yes — entirely useless, and nothing here argues otherwise. What
 it buys is that the floor for touching a model this size becomes a laptop and patience
 rather than a cluster, and that the cost is now a measured number instead of a guess: the

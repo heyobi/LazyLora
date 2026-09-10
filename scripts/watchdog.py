@@ -75,6 +75,21 @@ def main():
     info.update(hdd_temp=hdd_temp, usb_resets=usb_resets)
     if hdd_temp >= 58:
         alerts.append(f"HDD {hdd_temp} °C")
+    # SMART wear counters: any increase is an alert, because the run reads about 3 TB per step
+    # from a consumer disk for a month, which is far beyond its rated workload
+    smart = sh("sudo -n smartctl -d sat -A /dev/$(lsblk -no PKNAME $(findmnt -no SOURCE /mnt/disk2tb 2>/dev/null) 2>/dev/null) 2>/dev/null | "
+               "awk '/Reallocated_Sector_Ct|Current_Pending_Sector|Offline_Uncorrectable|UDMA_CRC_Error_Count/{print $2\"=\"$10}'")
+    smart_now = {}
+    for kv in smart.split():
+        k, _, v = kv.partition("=")
+        if v.isdigit():
+            smart_now[k] = int(v)
+    info["smart"] = smart_now
+    smart_seen = state.get("smart_seen", {})
+    for k, v in smart_now.items():
+        if k in smart_seen and v > smart_seen[k]:
+            alerts.append(f"SMART {k}: {smart_seen[k]} -> {v}")
+    state["smart_seen"] = smart_now
     if usb_resets > state.get("usb_resets_seen", usb_resets) + 20:
         alerts.append(f"USB köprüsü sıfırlanıyor (+{usb_resets - state.get('usb_resets_seen', usb_resets)})")
     state["usb_resets_seen"] = usb_resets
@@ -154,6 +169,23 @@ def main():
         if alive and state["restarts"] and now - state.get("last_restart", 0) > 6 * 3600:
             state["restarts"] = 0     # a run that survived 6 h resets the restart budget
 
+    # copy every new checkpoint off the NVMe onto the root SSD, keeping the two newest; the
+    # checkpoint is weeks of compute and the only artefact that cannot be re-downloaded
+    try:
+        import shutil, glob
+        bdir = os.path.expanduser(os.environ.get("LAZYLORA_CKPT_BACKUP_DIR", "~/lazylora_ckpt_backup"))
+        os.makedirs(bdir, exist_ok=True)
+        cks = sorted(glob.glob(os.path.join(cfg.paths.checkpoints_dir, "lazy_lora_step_*.pt")), key=os.path.getmtime)
+        for ck in cks[-2:]:
+            dst = os.path.join(bdir, os.path.basename(ck))
+            if not os.path.exists(dst) or os.path.getsize(dst) != os.path.getsize(ck):
+                shutil.copy2(ck, dst + ".tmp"); os.replace(dst + ".tmp", dst)
+                info["backed_up"] = os.path.basename(ck)
+        for old_bk in sorted(glob.glob(os.path.join(bdir, "lazy_lora_step_*.pt")), key=os.path.getmtime)[:-2]:
+            os.remove(old_bk)
+    except Exception as exc:
+        alerts.append(f"checkpoint yedeği alınamadı: {exc}")
+
     for a in alerts:
         if not state["alerted"].get(a) or now - state["alerted"][a] > 6 * 3600:
             push("LazyLoRA uyarı", a)
@@ -167,7 +199,7 @@ def main():
                 f"{'/' + str(man['steps']) if man else ''}\n")
         if last:
             f.write(f"last step {last['step']}: loss {last['loss']:.4f}  at {time.strftime('%H:%M', time.localtime(last['time']))}\n")
-        f.write(f"hdd_ok={hdd_ok} hdd={hdd_temp}C usb_resets={usb_resets} disk_errors={disk_err} nvme_free={nvme_free:.1f}GB swap={swap_used:.1f}GB gpu={gpu_temp}C\n")
+        f.write(f"hdd_ok={hdd_ok} hdd={hdd_temp}C usb_resets={usb_resets} disk_errors={disk_err} nvme_free={nvme_free:.1f}GB swap={swap_used:.1f}GB gpu={gpu_temp}C smart={smart_now}\n")
         for a in alerts:
             f.write(f"ALERT: {a}\n")
     json.dump(state, open(os.path.join(W, "watchdog_state.json"), "w"))

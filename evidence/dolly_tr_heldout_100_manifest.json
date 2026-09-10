@@ -1,0 +1,17 @@
+{
+ "source": "dolly15k_tr.json",
+ "disjoint_from": "dolly_tr_400.jsonl",
+ "train_sha256": "510bb588580e5c98b98f9436a3f2b182338d964b798fe2169bf9b8e21cee5af7",
+ "seed": 1,
+ "candidates": 4777,
+ "selected": 100,
+ "by_category": {
+  "brainstorming": 24,
+  "general_qa": 34,
+  "open_qa": 24,
+  "summarization": 12,
+  "creative_writing": 6
+ },
+ "declared": "2026-09-10, secondary metric, see README 'Evaluation protocol'",
+ "sha256": "ab2286d1dcf2baa57f64acfd84faa914d2d3005e7f561f3472dec39fdc5ba389"
+}
