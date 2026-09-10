@@ -1,7 +1,7 @@
 # LinkedIn
 
 **Written** 8 September 2026, revised 10 September 2026.
-**Status:** neither version posted. When one is, this line gets the date and the link.
+**Status:** Turkish version posted on 10 September 2026: https://lnkd.in/p/dgXWCrAv — the exact text is under "Gönderilen sürüm" at the end of this file, in the author's own words; the drafts above are kept as written. English version not posted (the author's network is Turkish).
 
 Where this draft and [`../numbers.md`](../numbers.md) disagree, that table names the source
 and the source settles it.
@@ -326,3 +326,25 @@ Asıl uğraştığım şey doğrulama oldu. İleri geçişi bağımsız bir C im
 Bir eğitim adımı 7,44 saat sürüyor. 400 örneklik Türkçe koşu 3/100 adımda, 9-11 Ekim civarı bitiyor.
 
 github.com/heyobi/LazyLora
+
+---
+
+## Gönderilen sürüm (10 Eylül 2026, https://lnkd.in/p/dgXWCrAv)
+
+Yazarın kendi elden geçirdiği, LinkedIn'e giren metin. Görseller: `proof_loss_tr.png` ve
+`main_run_tr.png`. Yapay zekâ açıklaması gönderide yok, README'nin ilk ekranında.
+
+2,78 trilyon parametreli bir model 8 GB RAM'li bir laptopta eğitilebilir mi?
+
+Kimi K3 dil modeli üzerine, evdeki eski bir bilgisayarı kullanarak LoRA adaptörü eğitiyorum.
+
+Model belleğe sığmadığından, 1,56 TB'lık ağırlıklar USB diskte duruyor; her katman sırayla diskten okunuyor, işi bitince atılıyor. Modelin kendisine dokunulmuyor, eğitilen tek şey 590 MB'lık adaptör.
+
+Bu hafta döngünün doğru çalıştığını gördüm. Aynı diziyle tekrar tekrar eğitim yapınca loss 0,909'dan 0,157'ye indi. Bu ezber testi, mekanizmanın çalıştığının kanıtı. Modelin Türkçesi gerçekten iyileşti mi, onu bir ay sonra, önceden belirleyip git'e işlediğim bir eşikle ölçeceğim. 400 örnekle büyük bir sıçrama beklemiyorum; ne çıkarsa onu yazacağım.
+
+Asıl uğraştığım şey doğrulama oldu. İleri geçişi bağımsız bir C implementasyonuyla (github.com/FareedKhan-dev/kimi-k3-in-c) 93 katmanın hepsinde karşılaştırdım; karşılaştırmanın tamamı repoda.
+
+Bir eğitim adımı 7,44 saat sürüyor. 400 örneklik Türkçe koşu 3/100 adımda, 9-11 Ekim civarı bitiyor.
+
+github.com/heyobi/LazyLora
+

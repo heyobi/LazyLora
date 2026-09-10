@@ -22,7 +22,7 @@ a defect, and it is reportable as one.
 | [`hacker_news.md`](hacker_news.md) | Show HN | EN | Written 9 Sep 2026, revised 10 Sep. **Not posted.** |
 | [`reddit_localllama.md`](reddit_localllama.md) | r/LocalLLaMA | EN | Written 9 Sep 2026, revised 10 Sep. **Not posted.** |
 | [`x_thread.md`](x_thread.md) | X, eleven posts | EN | Written 9 Sep 2026, revised 10 Sep. **Not posted.** |
-| [`linkedin.md`](linkedin.md) | LinkedIn, long form and short | TR + EN | Written 8 Sep 2026, revised 10 Sep. **Not posted.** |
+| [`linkedin.md`](linkedin.md) | LinkedIn, long form and short | TR + EN | **Posted (TR) 10 Sep 2026:** https://lnkd.in/p/dgXWCrAv — the author's own edit of the short version, recorded verbatim at the end of the file. EN not posted. |
 | *(not in this repository)* | Letter to the author of `kimi-k3-in-c` | EN | **Sent by email on 10 September 2026** — the first of these to go anywhere. Kept out of the tree then and now: publishing a letter before its recipient has read it makes it an announcement rather than a letter, and this one thanks him for work that caught a real bug in mine. No reply is owed and none is assumed; if one comes, what it corrects goes into the repository, not into a post. |
 
 **The repository itself became public on 10 September 2026**, at
