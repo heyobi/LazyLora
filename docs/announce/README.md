@@ -138,3 +138,27 @@ the first ten comments were expected to say. It was craft aimed at an audience, 
 no business sitting eight lines from a rule about never quoting an unmeasured number. It was
 not thrown away; it was published elsewhere, as a post about how a launch was planned, which
 is the kind of document it actually is. It is not coming back here.
+
+## r/LocalLLaMA, what the subreddit actually does (researched 10 September 2026)
+
+- **Karma gate.** Since 24 April 2026 AutoModerator removes any submission from an account
+  with fewer than 5 comment-karma points earned inside r/LocalLLaMA (10 sitewide karma is
+  needed to comment at all). Of the 100 most recent posts on 9-10 September, 19 were
+  removed and 18 of those carried the karma notice. There is no review queue; the remedy the
+  moderators give is to comment in the sub, earn the karma, then post.
+- **Rule 3.** Primarily LLM-generated copy is not allowed. Non-native speakers may use an
+  LLM to refine a post only if the post says so. The draft therefore carries a disclosure
+  paragraph; do not remove it.
+- **Rule 4.** One post about one's own project is fine if the affiliation is plain and it
+  is well under a tenth of the account's activity.
+- **What the audience does.** The author of kimi-k3-in-c got 709 points in August 2026 with
+  a plain "not practical, here are the numbers, here is the C" post. Engine posts that
+  looked like "the third new engine today" were met with "why not llama.cpp" and "why not
+  contribute to Colibri". Commenters name Colibri, WASTE and BigMoeOnEdge as the existing
+  NVMe expert-streaming prior art; the README's related-work table should name them.
+- **Mechanics.** Text post, GitHub link in the body (the filter keys on karma, not links),
+  flair Discussion (median 3 points, 13 % of Discussion posts reach 100; Resources posts do
+  worse), Monday to Wednesday 16:00-17:30 Turkey time, four hours at the keyboard after.
+  Sources and the full data are in the workflow transcript of 10 September; the rules page
+  itself was read from the Wayback capture of 7 August 2026.
+

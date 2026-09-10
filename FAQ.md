@@ -155,9 +155,16 @@ tok/s. This is a 2.8× larger model on roughly 260× less RAM with no usable GPU
 about **7.44 hours per step** for that, which belongs in the same sentence as the ratio, or
 the ratio reads as a speed claim. It is not one.
 
+If the question is "why not Colibri, WARP or BigMoeOnEdge", the answer is shorter: they are
+inference engines, and very good ones, and they do not compute a gradient. Colibri in
+particular is the right tool for *running* Kimi K3 on this laptop; this engine is not built
+to run it, it is built to train an adapter on it, and its forward pass is slow for exactly
+that reason (per-sweep cost amortised over a batch, Bulgular.md §16.5). Nothing here competes
+with them on inference, and the related-work table says so.
+
 **Open:** [Related work](README.md#related-work) and [Cost, measured](README.md#cost-measured).
 
-**Where the checking stops:** the KTransformers figures are their published ones, not something I measured.
+**Where the checking stops:** the KTransformers figures are their published ones, not something I measured; so are the star counts and descriptions of the three inference engines, read from their repositories on 10 September 2026.
 
 ---
 

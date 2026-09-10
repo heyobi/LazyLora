@@ -516,7 +516,8 @@ for L in LAYERS:
         direction perturbs it by a relative 3e-5 -- below what fp32 can resolve, which is
         why an earlier version of this check reported a 3.1e-2 "mismatch" on a gradient
         that is in fact correct to four digits (docs/QUICKSTART.md, "the bank direction").
-        With eps = 2e-3 * ||tensor|| the same direction agrees to 1.6e-4.
+        With the step measured against the tensor the same direction agrees to 2.09e-05
+        (Bulgular.md section 20); a second bound below keeps the step above fp32 noise too.
 
         Richardson combines the steps eps and eps/2 into an estimate whose leading
         truncation term cancels, so the check is accurate at the large step that fp32
